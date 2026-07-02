@@ -1,0 +1,5 @@
+.enhancement-fragment { display: contents; }
+.probability-wrap { max-height: none; }
+.probability-table { min-width: 900px; }
+.probability-table td, .probability-table th { font-size: 12px; }
+.probability-table td:first-child { font-weight: 700; color: #c8e4ff; }
