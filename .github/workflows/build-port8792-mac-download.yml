@@ -1,0 +1,93 @@
+name: Build isolated port 8792 Mac package
+
+on:
+  push:
+    branches:
+      - merge/v6-reward-v7-dashboard-20260701
+    paths:
+      - .github/workflows/build-port8792-mac-download.yml
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: e3be6b4d5128a355385b67d222c9ff0af2d2b2b1
+          path: source
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Check isolated source
+        working-directory: source
+        run: npm run check
+      - name: Test isolated source
+        working-directory: source
+        run: npm test
+      - name: Build port 8792 Mac ZIP
+        working-directory: source
+        shell: bash
+        run: |
+          set -eu
+          NAME='Ricky-Bitcoin-Reward-Miner-v8-Mac-Port-8792'
+          mkdir "$NAME"
+          cp package.json server.js start.command README.md LICENSE INTEGRATION_STATUS.md SOURCES.md "$NAME"/
+          cp -R lib public tests "$NAME"/
+          cp tests.js "$NAME"/
+          chmod +x "$NAME/start.command"
+          cat > "$NAME/START-HERE.txt" <<'EOF'
+          RICKY BITCOIN REWARD MINER V8 — ISOLATED PORT 8792 BUILD
+
+          Tested source commit:
+          e3be6b4d5128a355385b67d222c9ff0af2d2b2b1
+
+          IMPORTANT:
+          This version uses local port 8792 so an older server on 8791 cannot impersonate it.
+
+          1. Close every old miner Terminal window and browser tab.
+          2. Open this folder.
+          3. Control-click start.command, choose Open, then Open again if macOS asks.
+          4. The browser must open at http://127.0.0.1:8792/
+          5. Confirm the header says:
+             BUILD: UI/API FIX 2 · LOCAL PORT 8792
+          6. Enter ONLY your PUBLIC Bitcoin mainnet receiving address.
+          7. Leave worker name as ricky and use 1 CPU thread.
+          8. Click Start reward-eligible attempt once.
+          9. The status should advance through connection, subscription,
+             authorization, live-job receipt, and fresh hashing.
+          10. Keep Terminal open while mining. Use Stop before closing it.
+
+          Never enter a seed phrase, private key, PIN, xpub, or wallet file.
+          CPU mining is extraordinarily unlikely to find a Bitcoin block and is
+          not expected to be profitable.
+          EOF
+          zip -r -X "$NAME.zip" "$NAME"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Ricky-Bitcoin-Reward-Miner-v8-Mac-Port-8792
+          path: source/Ricky-Bitcoin-Reward-Miner-v8-Mac-Port-8792.zip
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/checkout@v4
+        with:
+          ref: merge/v6-reward-v7-dashboard-20260701
+          fetch-depth: 0
+          path: publisher
+      - name: Publish package to immutable commit
+        shell: bash
+        run: |
+          set -eu
+          cd publisher
+          mkdir -p dist
+          cp ../source/Ricky-Bitcoin-Reward-Miner-v8-Mac-Port-8792.zip dist/
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add dist/Ricky-Bitcoin-Reward-Miner-v8-Mac-Port-8792.zip
+          if ! git diff --cached --quiet; then
+            git commit -m 'build: publish isolated port 8792 Mac package'
+            git push origin HEAD:merge/v6-reward-v7-dashboard-20260701
+          fi
