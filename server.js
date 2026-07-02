@@ -614,6 +614,7 @@ function publicState() {
   const eligibility = rewardEligibility();
   return {
     ...state,
+    logicalCpus: os.cpus().length || 1,
     records: state.records.slice(-500),
     currentSecond: currentSecondStats(),
     eligibility,

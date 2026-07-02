@@ -212,6 +212,11 @@ async function main() {
   assert.ok(html.includes('Start reward-eligible attempt'));
   const appSource = require('fs').readFileSync(require('path').join(__dirname, 'public', 'app.js'), 'utf8');
   assert.ok(appSource.includes('REWARD-ELIGIBLE WORK ACTIVE'));
+  assert.ok(appSource.includes("new EventSource('/api/events')"));
+  assert.ok(appSource.includes("addEventListener('state'"));
+  assert.ok(appSource.includes('status.eligibility || {}'));
+  assert.ok(appSource.includes('result.state || await requestJson'));
+  assert.ok(!appSource.includes("new EventSource('/events')"));
   assert.ok(html.includes('Best hash · current second'));
   assert.ok(!html.includes('browser SHA-256d demo'));
 

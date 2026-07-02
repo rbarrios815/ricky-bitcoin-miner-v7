@@ -123,8 +123,9 @@ async function validateAddress() {
 }
 
 function renderEligibility(status) {
-  elements.eligibilityReason.textContent = status.eligibilityReason || 'Unknown eligibility state';
-  if (status.rewardEligible) {
+  const eligibility = status.eligibility || {};
+  elements.eligibilityReason.textContent = eligibility.reason || 'Unknown eligibility state';
+  if (eligibility.eligible) {
     elements.eligibilityBadge.textContent = 'REWARD-ELIGIBLE WORK ACTIVE';
     elements.eligibilityBadge.className = 'badge good';
     elements.eligibilityNotice.className = 'notice good';
@@ -145,6 +146,7 @@ function statusLabel(status) {
   if (!status.jobId) return 'Waiting for live job';
   if (!status.currentWork) return 'Constructing live work';
   if (!status.submissionReady) return 'Submission path unavailable';
+  if (!status.eligibility?.eligible) return status.eligibility?.reason || 'Waiting for verified live hashing';
   return 'Hashing live reward-eligible work';
 }
 
@@ -318,9 +320,10 @@ async function startMining() {
   if (!await validateAddress()) return;
   elements.startBtn.disabled = true;
   try {
-    updateStatus(await postJson('/api/start', {
+    const result = await postJson('/api/start', {
       address: elements.address.value.trim(), worker: elements.workerName.value.trim(), pool: elements.pool.value, threads: Number(elements.threads.value)
-    }));
+    });
+    updateStatus(result.state || await requestJson('/api/status'));
   } catch (error) {
     appendLog({ source: 'error', line: error.message });
     alert(error.message);
@@ -329,8 +332,10 @@ async function startMining() {
 }
 
 async function stopMining() {
-  try { updateStatus(await postJson('/api/stop')); }
-  catch (error) { appendLog({ source: 'error', line: error.message }); }
+  try {
+    await postJson('/api/stop');
+    updateStatus(await requestJson('/api/status'));
+  } catch (error) { appendLog({ source: 'error', line: error.message }); }
 }
 
 function csvValue(value) { return `"${String(value ?? '').replace(/"/g, '""')}"`; }
@@ -347,23 +352,26 @@ function exportCsv() {
 
 async function clearRecords() {
   if (!confirm('Clear saved best/worst records and current-block history? Lifetime hash count will remain.')) return;
-  try { updateStatus(await postJson('/api/clear-records')); }
-  catch (error) { alert(error.message); }
+  try {
+    await postJson('/api/clear-records');
+    updateStatus(await requestJson('/api/status'));
+  } catch (error) { alert(error.message); }
 }
 
 async function loadNetwork() {
   try {
     const data = await requestJson('/api/network');
     observedHeight = data.height;
-    elements.networkStatus.textContent = data.height == null ? `Network height unavailable · ${data.source}` : `Height ${Number(data.height).toLocaleString()} · ${data.source}`;
+    const sourceLabel = Array.isArray(data.sources) && data.sources.length ? data.sources.join(', ') : 'live public sources';
+    elements.networkStatus.textContent = data.height == null ? `Network height unavailable · ${sourceLabel}` : `Height ${Number(data.height).toLocaleString()} · ${sourceLabel}`;
     if (currentStatus) renderBlock(currentStatus);
   } catch (_) { elements.networkStatus.textContent = 'Observed network height unavailable; live Stratum target remains authoritative.'; }
 }
 
 function connectEvents() {
   if (eventSource) eventSource.close();
-  eventSource = new EventSource('/events');
-  eventSource.addEventListener('status', event => updateStatus(JSON.parse(event.data)));
+  eventSource = new EventSource('/api/events');
+  eventSource.addEventListener('state', event => updateStatus(JSON.parse(event.data)));
   eventSource.addEventListener('log', event => appendLog(JSON.parse(event.data)));
   eventSource.onerror = () => {
     elements.helperBadge.textContent = 'Local helper disconnected'; elements.helperBadge.className = 'badge bad';
