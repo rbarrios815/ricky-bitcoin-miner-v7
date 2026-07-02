@@ -1,0 +1,65 @@
+name: Build tested Mac download
+
+on:
+  push:
+    branches:
+      - merge/v6-reward-v7-dashboard-20260701
+    paths:
+      - .github/workflows/build-mac-download.yml
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 1394a9b467c3663f1600a8d2dba44d3e7efef1a0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm run check
+      - run: npm test
+      - name: Build Mac package
+        shell: bash
+        run: |
+          set -eu
+          NAME='Ricky-Bitcoin-Reward-Miner-v8-Mac'
+          mkdir "$NAME"
+          cp package.json server.js start.command README.md LICENSE INTEGRATION_STATUS.md SOURCES.md "$NAME"/
+          cp -R lib public tests "$NAME"/
+          cp tests.js "$NAME"/
+          chmod +x "$NAME/start.command"
+          cat > "$NAME/START-HERE.txt" <<'EOF'
+          RICKY BITCOIN REWARD MINER V8 — START HERE
+
+          Tested source commit:
+          1394a9b467c3663f1600a8d2dba44d3e7efef1a0
+
+          1. Open this folder on your Mac.
+          2. Double-click start.command.
+             If macOS blocks it, Control-click start.command, choose Open, then Open again.
+          3. Your browser should open http://127.0.0.1:8791/?version=reward-v8
+          4. Enter ONLY your PUBLIC Bitcoin mainnet receiving address.
+             Never enter a seed phrase, private key, PIN, wallet file, or xpub.
+          5. Leave the worker name as ricky and start with 1 CPU thread.
+          6. Click Start reward-eligible attempt.
+          7. Confirm that connection, subscription, authorization, live-job receipt,
+             and hash counts appear. The green badge only activates after fresh live
+             hashing is observed for the current job.
+          8. Keep the Terminal window open while mining. Closing it stops the miner.
+
+          CPU mining is extraordinarily unlikely to find a Bitcoin block and is not
+          expected to be profitable. This package is for measurement and a genuine
+          reward-eligible attempt, not an earnings promise.
+          EOF
+          zip -r -X "$NAME.zip" "$NAME"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Ricky-Bitcoin-Reward-Miner-v8-Mac
+          path: Ricky-Bitcoin-Reward-Miner-v8-Mac.zip
+          if-no-files-found: error
+          retention-days: 7
