@@ -13,7 +13,7 @@ const PORT = Number(process.env.PORT || 8791);
 const ROOT = __dirname;
 const PUBLIC_DIR = path.join(ROOT, 'public');
 const STATE_FILE = path.join(ROOT, '.miner-state.json');
-const DEFAULT_ADDRESS = 'bc1qjuf2d7s5mfukj50pd48ruk6asxqy7c4rtgx0sx';
+const DEFAULT_ADDRESS = '';
 const MAX_RECORDS = 1000;
 const ALLOWED_POOLS = new Set([
   'stratum+tcp://solo.stratum.braiins.com:3333',
@@ -339,40 +339,39 @@ function aggregateSecond(batch) {
     ? new Float64Array(batch.prefixes)
     : ArrayBuffer.isView(batch.prefixes)
       ? new Float64Array(batch.prefixes.buffer, batch.prefixes.byteOffset, batch.prefixes.byteLength / 8)
-      : new Float64Array(0);
-  bucket.count += Number(batch.hashes || 0);
+      : new Float64Array(Array.isArray(batch.prefixes) ? batch.prefixes : []);
+  bucket.count += Number(batch.count) || prefixes.length;
   bucket.segments.push(new Float64Array(prefixes));
   bucket.dirty = true;
 
-  if (batch.bestHashHex && (!bucket.best || compareHash(batch.bestHashHex, bucket.best.hash) < 0)) {
-    bucket.best = {
-      hash: batch.bestHashHex,
-      difficulty: Number(batch.bestDifficulty) || 0,
-      nonce: batch.bestNonce,
-      workerId: batch.workerId
-    };
-  }
-  if (batch.worstHashHex && (!bucket.worst || compareHash(batch.worstHashHex, bucket.worst.hash) > 0)) {
-    bucket.worst = {
-      hash: batch.worstHashHex,
-      difficulty: Number(batch.worstDifficulty) || 0,
-      nonce: batch.worstNonce,
-      workerId: batch.workerId
-    };
-  }
+  const best = batch.bestHash ? {
+    hash: batch.bestHash,
+    difficulty: Number(batch.bestDifficulty) || 0,
+    foundAt: Number(batch.bestFoundAt) || Date.now(),
+    nonce: batch.bestNonce
+  } : null;
+  const worst = batch.worstHash ? {
+    hash: batch.worstHash,
+    difficulty: Number(batch.worstDifficulty) || 0,
+    foundAt: Number(batch.worstFoundAt) || Date.now(),
+    nonce: batch.worstNonce
+  } : null;
 
-  const cutoff = Math.floor(Date.now() / 1000) - 3;
-  for (const key of secondBuckets.keys()) {
-    if (key < cutoff) secondBuckets.delete(key);
+  if (best && (!bucket.best || compareHash(best.hash, bucket.best.hash) < 0)) bucket.best = best;
+  if (worst && (!bucket.worst || compareHash(worst.hash, bucket.worst.hash) > 0)) bucket.worst = worst;
+
+  const cutoff = Math.floor(Date.now() / 1000) - 5;
+  for (const second of secondBuckets.keys()) {
+    if (second < cutoff) secondBuckets.delete(second);
   }
 }
 
-function ensureCurrentBlock(batch = null) {
-  if (!state.currentBlock) {
+function ensureBlockScope(batch) {
+  const key = batch.prevhash || state.observedNetworkTipHash || state.jobId || null;
+  if (!state.currentBlock || state.currentBlock.key !== key) {
     state.currentBlock = {
-      key: null,
-      prevhash: null,
-      jobId: batch?.jobId || state.jobId,
+      key,
+      height: state.observedNetworkHeight,
       startedAt: Date.now(),
       hashes: 0,
       best: null,
@@ -382,151 +381,209 @@ function ensureCurrentBlock(batch = null) {
   return state.currentBlock;
 }
 
-function createRecord(candidate, batch, counts) {
-  const previous = state.bestRecord;
-  const evidence = shareEvidence.get(evidenceKey(batch.jobId, candidate.hash)) || {};
-  const difficulty = Number(candidate.difficulty) || 0;
-  const networkDifficulty = Number(batch.networkDifficulty) || null;
-  const meetsNetworkDifficulty = Boolean(networkDifficulty && difficulty >= networkDifficulty);
-  const at = Number(candidate.foundAt) || Date.now();
+function recordImprovement(difficulty, previousDifficulty) {
+  if (!Number.isFinite(difficulty) || !Number.isFinite(previousDifficulty) || previousDifficulty <= 0) return null;
+  return difficulty / previousDifficulty;
+}
 
+function targetPercentage(difficulty) {
+  if (!Number.isFinite(difficulty) || !Number.isFinite(state.networkDifficulty) || state.networkDifficulty <= 0) return null;
+  return (difficulty / state.networkDifficulty) * 100;
+}
+
+function makeRecord(candidate, batch, counts) {
+  const previous = state.bestRecord;
+  const eligible = Boolean(batch.rewardEligible);
   return {
-    schemaVersion: 3,
-    id: `${at}-${candidate.hash.slice(0, 16)}`,
-    at,
-    timestamp: new Date(at).toISOString(),
+    schemaVersion: 1,
+    id: `${candidate.foundAt || Date.now()}-${candidate.hash.slice(0, 16)}`,
+    at: candidate.foundAt || Date.now(),
+    timestamp: new Date(candidate.foundAt || Date.now()).toISOString(),
     hash: candidate.hash,
-    difficulty,
+    difficulty: Number(candidate.difficulty) || 0,
     previousHash: previous?.hash || null,
-    previousDifficulty: previous?.difficulty ?? null,
-    previousAt: previous?.at ?? null,
-    improvementMultiplier: previous?.difficulty > 0 ? difficulty / previous.difficulty : null,
-    networkDifficulty,
-    networkTarget: batch.networkTarget || null,
-    targetPercentage: networkDifficulty ? (difficulty / networkDifficulty) * 100 : null,
-    poolDifficulty: Number(batch.poolDifficulty) || null,
-    shareTarget: batch.shareTarget || null,
+    previousDifficulty: Number(previous?.difficulty) || null,
+    previousAt: Number(previous?.at) || null,
+    improvementMultiplier: recordImprovement(Number(candidate.difficulty), Number(previous?.difficulty)),
+    networkDifficulty: Number(state.networkDifficulty) || null,
+    networkTarget: state.networkTarget || batch.networkTargetHex || null,
+    poolDifficulty: Number(state.poolDifficulty) || null,
+    poolTarget: batch.shareTargetHex || null,
+    targetPercentage: targetPercentage(Number(candidate.difficulty)),
     sessionHashes: counts.sessionHashes,
     lifetimeHashes: counts.lifetimeHashes,
     currentBlockHashes: counts.currentBlockHashes,
-    jobId: batch.jobId,
-    networkBlockKey: state.currentBlock?.key || null,
-    generation: batch.generation,
-    extranonce2: batch.extranonce2,
-    ntime: batch.ntime,
-    version: batch.version,
-    workerId: batch.workerId,
-    nonce: candidate.nonce,
+    sessionId: batch.sessionId || null,
     workSource: 'live-stratum-mainnet',
-    rewardEligibleAtHash: rewardEligibility().eligible,
-    submitted: Boolean(evidence.submitted),
-    submissionStatus: evidence.submissionStatus || 'not-submitted-below-pool-target',
-    shareAccepted: Boolean(evidence.shareAccepted),
-    blockCandidate: Boolean(evidence.blockCandidate || meetsNetworkDifficulty),
-    blockCandidateStatus: evidence.blockCandidateStatus || (meetsNetworkDifficulty ? 'candidate-detected-awaiting-submission-result' : 'not-a-network-candidate'),
-    meetsNetworkDifficulty,
-    hashrate: state.hashrateHps,
-    runtimeMs: state.startedAt ? Date.now() - new Date(state.startedAt).getTime() : null
+    pool: state.pool,
+    worker: `${state.address}.${state.worker}`,
+    jobId: batch.jobId || null,
+    generation: batch.generation ?? null,
+    extranonce2: batch.extranonce2 || null,
+    ntime: batch.ntime || null,
+    version: batch.version || null,
+    nbits: batch.nbits || null,
+    nonce: candidate.nonce ?? null,
+    rewardEligibleAtHash: eligible,
+    submitted: false,
+    submissionStatus: eligible ? 'not-a-share' : 'ineligible-at-hash',
+    shareAccepted: false,
+    shareRejected: false,
+    blockCandidate: Boolean(candidate.meetsNetworkTarget),
+    blockCandidateStatus: candidate.meetsNetworkTarget
+      ? eligible ? 'candidate-awaiting-pool-response' : 'candidate-ineligible-at-hash'
+      : 'not-a-block-candidate',
+    hashrate: Number(batch.hashrateHps) || state.hashrateHps,
+    runtimeMs: state.startedAt ? Date.now() - state.startedAt : null
   };
 }
 
-function updateRecordFromEvidence(jobId, hash, evidence) {
-  const record = state.records.find(item => item.jobId === jobId && item.hash === hash);
-  if (!record) return;
-  Object.assign(record, {
-    submitted: Boolean(evidence.submitted),
-    submissionStatus: evidence.submissionStatus,
-    shareAccepted: Boolean(evidence.shareAccepted),
-    blockCandidate: Boolean(evidence.blockCandidate),
-    blockCandidateStatus: evidence.blockCandidateStatus
-  });
-  if (state.bestRecord?.id === record.id) state.bestRecord = record;
+function addRecord(candidate, batch, counts) {
+  if (!candidate?.hash) return null;
+  if (state.bestRecord && compareHash(candidate.hash, state.bestRecord.hash) >= 0) return null;
+  const record = makeRecord(candidate, batch, counts);
+  state.bestRecord = record;
+  state.bestHash = record.hash;
+  state.bestShareDifficulty = record.difficulty;
+  state.records.push(record);
+  state.records = state.records.slice(-MAX_RECORDS);
+  if (record.blockCandidate) state.blockCandidates += 1;
+  shareEvidence.set(evidenceKey(record.jobId, record.hash), record.id);
+  scheduleSave();
+  broadcastState();
+  return record;
+}
+
+function updateWorst(batch, counts) {
+  if (!batch.worstHash) return;
+  if (state.worstRecord && compareHash(batch.worstHash, state.worstRecord.hash) <= 0) return;
+  state.worstRecord = {
+    at: batch.worstFoundAt || Date.now(),
+    timestamp: new Date(batch.worstFoundAt || Date.now()).toISOString(),
+    hash: batch.worstHash,
+    difficulty: Number(batch.worstDifficulty) || 0,
+    sessionHashes: counts.sessionHashes,
+    lifetimeHashes: counts.lifetimeHashes,
+    currentBlockHashes: counts.currentBlockHashes,
+    jobId: batch.jobId || null,
+    generation: batch.generation ?? null,
+    extranonce2: batch.extranonce2 || null,
+    ntime: batch.ntime || null,
+    nonce: batch.worstNonce ?? null,
+    rewardEligibleAtHash: Boolean(batch.rewardEligible)
+  };
+  state.worstHash = batch.worstHash;
+  state.worstDifficulty = Number(batch.worstDifficulty) || 0;
   scheduleSave();
 }
 
-function processBatch(batch) {
+function applyHashBatch(batch) {
   aggregateSecond(batch);
-  const count = Number(batch.hashes || 0);
+  const block = ensureBlockScope(batch);
   const sessionBefore = state.sessionHashes;
   const lifetimeBefore = state.lifetimeHashes;
-  const block = ensureCurrentBlock(batch);
   const blockBefore = Number(block.hashes) || 0;
+  const count = Number(batch.count) || 0;
 
   const candidates = Array.isArray(batch.recordCandidates)
     ? [...batch.recordCandidates].sort((left, right) => Number(left.offset) - Number(right.offset))
-    : [];
+    : batch.bestHash ? [{
+        hash: batch.bestHash,
+        difficulty: batch.bestDifficulty,
+        offset: batch.bestOffset,
+        foundAt: batch.bestFoundAt,
+        nonce: batch.bestNonce,
+        meetsShareTarget: batch.bestMeetsShareTarget,
+        meetsNetworkTarget: batch.bestMeetsNetworkTarget
+      }] : [];
 
   for (const candidate of candidates) {
-    if (!candidate.hash || (state.bestRecord && compareHash(candidate.hash, state.bestRecord.hash) >= 0)) continue;
     const offset = Math.max(0, Number(candidate.offset) || 0);
-    const record = createRecord(candidate, batch, {
+    addRecord(candidate, batch, {
       sessionHashes: sessionBefore + offset + 1,
       lifetimeHashes: lifetimeBefore + offset + 1,
       currentBlockHashes: blockBefore + offset + 1
     });
-    state.bestRecord = record;
-    state.bestHash = record.hash;
-    state.bestShareDifficulty = record.difficulty;
-    state.records.push(record);
-    state.records = state.records.slice(-MAX_RECORDS);
   }
 
-  if (batch.worstHashHex && (!state.worstRecord || compareHash(batch.worstHashHex, state.worstRecord.hash) > 0)) {
-    const offset = Math.max(0, Number(batch.worstOffset) || 0);
-    state.worstRecord = {
-      hash: batch.worstHashHex,
-      difficulty: Number(batch.worstDifficulty) || 0,
-      at: Number(batch.worstFoundAt) || Date.now(),
-      timestamp: new Date(Number(batch.worstFoundAt) || Date.now()).toISOString(),
-      sessionHashes: sessionBefore + offset + 1,
-      lifetimeHashes: lifetimeBefore + offset + 1,
-      currentBlockHashes: blockBefore + offset + 1,
-      jobId: batch.jobId,
-      workerId: batch.workerId,
-      nonce: batch.worstNonce,
-      workSource: 'live-stratum-mainnet'
-    };
-    state.worstHash = state.worstRecord.hash;
-    state.worstDifficulty = state.worstRecord.difficulty;
-  }
-
-  if (batch.bestHashHex && (!block.best || compareHash(batch.bestHashHex, block.best.hash) < 0)) {
-    block.best = {
-      hash: batch.bestHashHex,
-      difficulty: Number(batch.bestDifficulty) || 0,
-      at: Number(batch.bestFoundAt) || Date.now()
-    };
-  }
-  if (batch.worstHashHex && (!block.worst || compareHash(batch.worstHashHex, block.worst.hash) > 0)) {
-    block.worst = {
-      hash: batch.worstHashHex,
-      difficulty: Number(batch.worstDifficulty) || 0,
-      at: Number(batch.worstFoundAt) || Date.now()
-    };
-  }
+  updateWorst(batch, {
+    sessionHashes: sessionBefore + Math.max(0, Number(batch.worstOffset) || count - 1) + 1,
+    lifetimeHashes: lifetimeBefore + Math.max(0, Number(batch.worstOffset) || count - 1) + 1,
+    currentBlockHashes: blockBefore + Math.max(0, Number(batch.worstOffset) || count - 1) + 1
+  });
 
   state.sessionHashes += count;
   state.lifetimeHashes += count;
   block.hashes = blockBefore + count;
+  state.hashrateHps = Number(batch.hashrateHps) || state.hashrateHps;
+
+  const best = batch.bestHash ? {
+    hash: batch.bestHash,
+    difficulty: Number(batch.bestDifficulty) || 0,
+    at: batch.bestFoundAt || Date.now()
+  } : null;
+  const worst = batch.worstHash ? {
+    hash: batch.worstHash,
+    difficulty: Number(batch.worstDifficulty) || 0,
+    at: batch.worstFoundAt || Date.now()
+  } : null;
+  if (best && (!block.best || compareHash(best.hash, block.best.hash) < 0)) block.best = best;
+  if (worst && (!block.worst || compareHash(worst.hash, block.worst.hash) > 0)) block.worst = worst;
+
+  if (Number.isFinite(state.networkDifficulty) && state.networkDifficulty > 0) {
+    state.closestPercent = (state.bestShareDifficulty / state.networkDifficulty) * 100;
+  }
   scheduleSave();
+  broadcastState();
 }
 
-function publicStatus() {
+function findRecordById(id) {
+  return state.records.find(record => record.id === id) || null;
+}
+
+function markShareSubmitted(event) {
+  state.sharesSubmitted += 1;
+  const recordId = shareEvidence.get(evidenceKey(event.jobId, event.hash));
+  const record = findRecordById(recordId);
+  if (record) {
+    record.submitted = true;
+    record.submissionStatus = 'submitted-awaiting-response';
+    record.submittedAt = Date.now();
+    record.shareRequestId = event.requestId;
+  }
+  scheduleSave();
+  broadcastState();
+}
+
+function markShareResult(event) {
+  if (event.accepted) state.accepted += 1;
+  else state.rejected += 1;
+  const recordId = shareEvidence.get(evidenceKey(event.jobId, event.hash));
+  const record = findRecordById(recordId);
+  if (record) {
+    record.submitted = true;
+    record.submissionStatus = event.accepted ? 'accepted-by-pool' : 'rejected-by-pool';
+    record.shareAccepted = Boolean(event.accepted);
+    record.shareRejected = !event.accepted;
+    record.poolResponse = event.error || null;
+    record.respondedAt = Date.now();
+    if (record.blockCandidate) {
+      record.blockCandidateStatus = event.accepted ? 'candidate-accepted-by-pool' : 'candidate-rejected-by-pool';
+      if (event.accepted) state.acceptedBlockCandidates += 1;
+    }
+  }
+  scheduleSave();
+  broadcastState();
+}
+
+function publicState() {
   const eligibility = rewardEligibility();
   return {
     ...state,
-    rewardEligible: eligibility.eligible,
-    eligibilityReason: eligibility.reason,
-    currentSecond: currentSecondStats(),
     records: state.records.slice(-500),
-    minerInstalled: true,
-    minerPath: 'Built-in Node.js Stratum V1 miner',
-    architecture: process.arch,
-    platform: process.platform,
-    cpuModel: os.cpus()[0]?.model || 'Unknown',
-    logicalCpus: os.cpus().length,
-    defaultAddress: DEFAULT_ADDRESS,
-    logs: logBuffer.slice(-80)
+    currentSecond: currentSecondStats(),
+    eligibility,
+    logs: logBuffer.slice(-100)
   };
 }
 
@@ -541,339 +598,320 @@ function broadcast(event, data) {
   }
 }
 
-function broadcastStatus() {
-  broadcast('status', publicStatus());
+function broadcastState() {
+  broadcast('state', publicState());
 }
 
-function resetCurrentBlock(job) {
-  const oldKey = state.currentBlock?.key;
-  if (oldKey === job.prevhash) {
-    state.currentBlock.jobId = job.jobId;
-    return;
+function stopMiner(reason = 'Stopped') {
+  if (miner) {
+    try { miner.stop(); } catch (_) {}
+    miner.removeAllListeners();
+    miner = null;
   }
-  state.currentBlock = {
-    key: job.prevhash,
-    prevhash: job.prevhash,
-    jobId: job.jobId,
-    startedAt: Number(job.receivedAt) || Date.now(),
-    hashes: 0,
-    best: null,
-    worst: null
-  };
-  scheduleSave();
-}
-
-function startMiner(config) {
-  if (miner) throw new Error('Miner is already running');
-
-  const address = String(config.address || '').trim();
-  const worker = String(config.worker || 'ricky').trim().replace(/[^a-zA-Z0-9_.-]/g, '').slice(0, 32) || 'ricky';
-  const pool = String(config.pool || '');
-  const threads = Math.max(1, Math.min(os.cpus().length, Number.parseInt(config.threads, 10) || 1));
-
-  if (!validateBitcoinAddress(address)) throw new Error('Invalid Bitcoin mainnet payout address');
-  if (!ALLOWED_POOLS.has(pool)) throw new Error('Pool is not in the safety allowlist');
-
-  const history = historyFromState();
-  state = {
-    ...initialState(history),
-    running: true,
-    startedAt: new Date().toISOString(),
-    address,
-    worker,
-    pool,
-    threads
-  };
-  logBuffer = [];
-  secondBuckets.clear();
-  shareEvidence.clear();
-
-  miner = new StratumMiner({
-    pool,
-    username: `${address}.${worker}`,
-    password: 'x',
-    threads,
-    chunkSize: 2048
-  });
-
-  miner.on('log', line => addLog('miner', line));
-  miner.on('status', update => {
-    Object.assign(state, update);
-    broadcastStatus();
-  });
-  miner.on('job', job => {
-    state.jobId = job.jobId;
-    state.jobReceivedAt = job.receivedAt;
-    state.networkDifficulty = job.networkDifficulty;
-    state.networkTarget = job.networkTarget;
-    resetCurrentBlock(job);
-    broadcastStatus();
-  });
-  miner.on('work', work => {
-    state.currentWork = work;
-    state.generation = work.generation;
-    state.poolDifficulty = work.poolDifficulty;
-    state.networkDifficulty = work.networkDifficulty;
-    state.networkTarget = work.networkTarget;
-    broadcastStatus();
-  });
-  miner.on('batch', batch => processBatch(batch));
-  miner.on('progress', update => {
-    state.hashrateHps = update.hashrateHps;
-    state.bestHash = state.bestRecord?.hash || update.bestHash;
-    state.bestShareDifficulty = state.bestRecord?.difficulty || update.bestDifficulty;
-    state.worstHash = state.worstRecord?.hash || update.worstHash;
-    state.worstDifficulty = state.worstRecord?.difficulty || update.worstDifficulty;
-    state.closestPercent = update.closestPercent;
-    state.networkDifficulty = update.networkDifficulty;
-    state.networkTarget = update.networkTarget;
-    state.poolDifficulty = update.poolDifficulty;
-    broadcastStatus();
-  });
-  miner.on('share', share => {
-    if (share.sent) state.sharesSubmitted += 1;
-    if (share.blockCandidate) state.blockCandidates += 1;
-    const evidence = {
-      submitted: Boolean(share.sent),
-      submissionStatus: share.sent ? 'submitted-awaiting-pool-response' : 'submission-send-failed',
-      shareAccepted: false,
-      blockCandidate: Boolean(share.blockCandidate),
-      blockCandidateStatus: share.blockCandidate
-        ? (share.sent ? 'submitted-candidate-awaiting-pool-response' : 'candidate-send-failed')
-        : 'not-a-network-candidate'
-    };
-    shareEvidence.set(evidenceKey(share.jobId, share.hashHex), evidence);
-    updateRecordFromEvidence(share.jobId, share.hashHex, evidence);
-    broadcastStatus();
-  });
-  miner.on('submission', result => {
-    if (result.accepted) state.accepted += 1;
-    else state.rejected += 1;
-    if (result.accepted && result.blockCandidate) state.acceptedBlockCandidates += 1;
-    const evidence = {
-      submitted: result.error !== 'socket-not-writable',
-      submissionStatus: result.accepted ? 'accepted-by-pool' : `rejected-or-unconfirmed:${result.error || 'pool-rejected'}`,
-      shareAccepted: Boolean(result.accepted),
-      blockCandidate: Boolean(result.blockCandidate),
-      blockCandidateStatus: result.blockCandidate
-        ? (result.accepted ? 'pool-accepted-candidate-network-confirmation-pending' : 'candidate-rejected-or-unconfirmed')
-        : 'not-a-network-candidate'
-    };
-    shareEvidence.set(evidenceKey(result.jobId, result.hashHex), evidence);
-    updateRecordFromEvidence(result.jobId, result.hashHex, evidence);
-    broadcastStatus();
-  });
-
-  addLog('system', `Starting live Stratum miner with ${threads} CPU thread(s).`);
-  miner.start();
-  return publicStatus();
-}
-
-async function stopMiner() {
-  if (!miner) return publicStatus();
-  addLog('system', 'Stopping miner…');
-  const current = miner;
-  miner = null;
-  await current.stop();
   state.running = false;
   state.connected = false;
   state.subscribed = false;
   state.authorized = false;
   state.submissionReady = false;
-  state.currentWork = null;
-  state.stoppedAt = new Date().toISOString();
   state.hashrateHps = 0;
-  addLog('system', 'Miner stopped.');
-  scheduleSave();
-  broadcastStatus();
-  return publicStatus();
+  state.stoppedAt = Date.now();
+  state.error = reason === 'Stopped' ? null : reason;
+  addLog('server', reason);
+  broadcastState();
 }
 
-async function fetchText(url, timeoutMs = 6000) {
+function startMiner(config) {
+  if (!validateBitcoinAddress(config.address)) throw new Error('Enter a valid Bitcoin mainnet payout address.');
+  if (!ALLOWED_POOLS.has(config.pool)) throw new Error('Pool endpoint is not allowed.');
+  if (!/^[a-zA-Z0-9_-]{1,32}$/.test(config.worker)) throw new Error('Worker name must use 1–32 letters, numbers, underscores, or hyphens.');
+  const threads = Math.max(1, Math.min(os.cpus().length || 1, Number(config.threads) || 1));
+
+  stopMiner('Restarting with requested settings');
+  secondBuckets.clear();
+  shareEvidence.clear();
+  state = initialState(historyFromState());
+  Object.assign(state, {
+    running: true,
+    startedAt: Date.now(),
+    stoppedAt: null,
+    address: config.address.trim(),
+    worker: config.worker.trim(),
+    pool: config.pool,
+    threads,
+    error: null
+  });
+
+  miner = new StratumMiner({
+    pool: config.pool,
+    username: `${state.address}.${state.worker}`,
+    password: 'x',
+    threads,
+    reconnect: true
+  });
+
+  miner.on('log', line => addLog('miner', line));
+  miner.on('connection', connected => {
+    state.connected = connected;
+    if (!connected) {
+      state.subscribed = false;
+      state.authorized = false;
+      state.submissionReady = false;
+      state.jobId = null;
+      state.currentWork = null;
+    }
+    broadcastState();
+  });
+  miner.on('subscribed', subscribed => {
+    state.subscribed = subscribed;
+    broadcastState();
+  });
+  miner.on('authorized', authorized => {
+    state.authorized = authorized;
+    if (!authorized) state.submissionReady = false;
+    broadcastState();
+  });
+  miner.on('submission-ready', ready => {
+    state.submissionReady = ready;
+    broadcastState();
+  });
+  miner.on('job', job => {
+    state.jobId = job.jobId;
+    state.jobReceivedAt = Date.now();
+    state.generation = job.generation;
+    state.currentWork = job;
+    state.networkTarget = job.networkTargetHex;
+    const nbitsDifficulty = Number(job.networkDifficulty);
+    if (Number.isFinite(nbitsDifficulty) && nbitsDifficulty > 0) state.networkDifficulty = nbitsDifficulty;
+    ensureBlockScope(job);
+    addLog('stratum', `Live job ${job.jobId} generation ${job.generation} received.`);
+    broadcastState();
+  });
+  miner.on('difficulty', difficulty => {
+    state.poolDifficulty = Number(difficulty) || null;
+    broadcastState();
+  });
+  miner.on('hashrate', hashrate => {
+    state.hashrateHps = Number(hashrate) || 0;
+    broadcastState();
+  });
+  miner.on('hash-batch', applyHashBatch);
+  miner.on('share-submitted', markShareSubmitted);
+  miner.on('share-result', markShareResult);
+  miner.on('error', error => {
+    state.error = error.message;
+    addLog('error', error.message);
+    broadcastState();
+  });
+  miner.on('stopped', () => {
+    state.running = false;
+    state.connected = false;
+    state.subscribed = false;
+    state.authorized = false;
+    state.submissionReady = false;
+    state.hashrateHps = 0;
+    broadcastState();
+  });
+
+  addLog('server', `Starting ${threads} CPU thread${threads === 1 ? '' : 's'} for ${state.pool}.`);
+  miner.start();
+  broadcastState();
+}
+
+async function fetchJsonOrText(url, timeoutMs = 7000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(url, {
-      signal: controller.signal,
-      headers: { 'User-Agent': 'RickyMinerReward/8.0' }
+      headers: { 'User-Agent': 'RickyRewardMinerV8/1.0' },
+      signal: controller.signal
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    return (await response.text()).trim();
+    const text = await response.text();
+    try { return JSON.parse(text); } catch (_) { return text.trim(); }
   } finally {
     clearTimeout(timer);
   }
 }
 
-async function networkPayload() {
+async function observedNetwork() {
   const now = Date.now();
   if (networkCache.payload && now - networkCache.at < 15000) return networkCache.payload;
   let height = null;
   let tipHash = null;
+  let difficulty = state.networkDifficulty;
+  const sources = [];
   try {
-    [height, tipHash] = await Promise.all([
-      fetchText('https://mempool.space/api/blocks/tip/height'),
-      fetchText('https://mempool.space/api/blocks/tip/hash')
-    ]);
-    height = Number(height);
-    if (!Number.isInteger(height)) height = null;
+    const mining = await fetchJsonOrText('https://mempool.space/api/v1/mining/hashrate/1m');
+    if (mining && typeof mining === 'object') {
+      difficulty = Number(mining.currentDifficulty || mining.difficulty) || difficulty;
+      sources.push('mempool.space');
+    }
   } catch (_) {}
+  try {
+    height = Number(await fetchJsonOrText('https://mempool.space/api/blocks/tip/height')) || null;
+    tipHash = String(await fetchJsonOrText('https://mempool.space/api/blocks/tip/hash') || '') || null;
+    if (!sources.includes('mempool.space')) sources.push('mempool.space');
+  } catch (_) {}
+  if (height == null) {
+    try {
+      height = Number(await fetchJsonOrText('https://blockchain.info/q/getblockcount')) || null;
+      sources.push('blockchain.info');
+    } catch (_) {}
+  }
+  if (!Number.isFinite(difficulty) || difficulty <= 0) {
+    try {
+      difficulty = Number(await fetchJsonOrText('https://blockchain.info/q/getdifficulty')) || null;
+      sources.push('blockchain.info');
+    } catch (_) {}
+  }
   state.observedNetworkHeight = height;
   state.observedNetworkTipHash = tipHash;
+  if (Number.isFinite(difficulty) && difficulty > 0) state.networkDifficulty = difficulty;
   const payload = {
-    difficulty: state.networkDifficulty,
-    networkHashrate: state.networkDifficulty ? state.networkDifficulty * 4294967296 / 600 : null,
     height,
     tipHash,
-    source: height != null || tipHash ? 'mempool.space' : 'live Stratum target only',
+    difficulty: Number.isFinite(difficulty) ? difficulty : null,
+    networkHashrate: Number.isFinite(difficulty) ? difficulty * (2 ** 32) / 600 : null,
+    sources,
     fetchedAt: now
   };
   networkCache = { at: now, payload };
   return payload;
 }
 
-function serveStatic(req, res, pathname) {
-  let decoded;
-  try {
-    decoded = decodeURIComponent(pathname);
-  } catch (_) {
-    res.writeHead(400); res.end('Bad request'); return;
-  }
-  const relative = decoded === '/' ? 'index.html' : decoded.replace(/^\/+/, '');
-  const filePath = path.resolve(PUBLIC_DIR, relative);
-  if (filePath !== PUBLIC_DIR && !filePath.startsWith(`${PUBLIC_DIR}${path.sep}`)) {
-    res.writeHead(403); res.end('Forbidden'); return;
-  }
+function contentType(file) {
+  const extension = path.extname(file).toLowerCase();
+  return {
+    '.html': 'text/html; charset=utf-8',
+    '.js': 'text/javascript; charset=utf-8',
+    '.css': 'text/css; charset=utf-8',
+    '.json': 'application/json; charset=utf-8',
+    '.svg': 'image/svg+xml',
+    '.png': 'image/png',
+    '.ico': 'image/x-icon'
+  }[extension] || 'application/octet-stream';
+}
 
-  fs.readFile(filePath, (error, data) => {
-    if (error) {
-      res.writeHead(error.code === 'ENOENT' ? 404 : 500);
-      res.end(error.code === 'ENOENT' ? 'Not found' : 'Server error');
-      return;
-    }
-    const extension = path.extname(filePath).toLowerCase();
-    const types = {
-      '.html': 'text/html; charset=utf-8',
-      '.js': 'text/javascript; charset=utf-8',
-      '.css': 'text/css; charset=utf-8',
-      '.json': 'application/json; charset=utf-8',
-      '.svg': 'image/svg+xml',
-      '.png': 'image/png'
-    };
+function serveStatic(req, res) {
+  let pathname;
+  try { pathname = decodeURIComponent(new URL(req.url, `http://${HOST}`).pathname); }
+  catch (_) { return json(res, 400, { error: 'Bad URL' }); }
+  if (pathname === '/') pathname = '/index.html';
+  const file = path.resolve(PUBLIC_DIR, `.${pathname}`);
+  if (file !== PUBLIC_DIR && !file.startsWith(`${PUBLIC_DIR}${path.sep}`)) return json(res, 403, { error: 'Forbidden' });
+  fs.readFile(file, (error, data) => {
+    if (error) return json(res, error.code === 'ENOENT' ? 404 : 500, { error: 'Not found' });
     res.writeHead(200, {
-      'Content-Type': types[extension] || 'application/octet-stream',
-      'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
-      Pragma: 'no-cache',
-      Expires: '0',
+      'Content-Type': contentType(file),
+      'Content-Length': data.length,
+      'Cache-Control': 'no-store',
       'X-Content-Type-Options': 'nosniff',
-      'Content-Security-Policy': "default-src 'self'; connect-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+      'Content-Security-Policy': "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; base-uri 'none'; frame-ancestors 'none'"
     });
     res.end(data);
   });
 }
 
-const server = http.createServer(async (req, res) => {
-  const url = new URL(req.url, `http://${req.headers.host || `${HOST}:${PORT}`}`);
-
-  if (req.method === 'GET' && url.pathname === '/api/status') {
-    json(res, 200, publicStatus());
-    return;
-  }
-
-  if (req.method === 'GET' && url.pathname === '/api/network') {
-    json(res, 200, await networkPayload());
-    return;
-  }
-
-  if (req.method === 'POST' && url.pathname === '/api/validate-address') {
-    try {
-      const body = await readJson(req);
-      json(res, 200, { valid: validateBitcoinAddress(body.address), address: String(body.address || '').trim() });
-    } catch (error) {
-      json(res, 400, { error: error.message });
-    }
-    return;
-  }
-
-  if (req.method === 'POST' && url.pathname === '/api/start') {
-    try {
-      const body = await readJson(req);
-      json(res, 200, startMiner(body));
-    } catch (error) {
-      state.error = error.message;
-      addLog('error', error.message);
-      json(res, 400, { error: error.message });
-    }
-    return;
-  }
-
-  if (req.method === 'POST' && url.pathname === '/api/stop') {
-    try {
-      json(res, 200, await stopMiner());
-    } catch (error) {
-      json(res, 500, { error: error.message });
-    }
-    return;
-  }
-
-  if (req.method === 'POST' && url.pathname === '/api/clear-records') {
-    try {
-      if (miner) throw new Error('Stop mining before clearing records');
-      state.records = [];
-      state.bestRecord = null;
-      state.worstRecord = null;
-      state.bestHash = null;
-      state.bestShareDifficulty = 0;
-      state.worstHash = null;
-      state.worstDifficulty = null;
-      state.currentBlock = null;
-      scheduleSave();
-      json(res, 200, publicStatus());
-    } catch (error) {
-      json(res, 400, { error: error.message });
-    }
-    return;
-  }
-
-  if (req.method === 'GET' && url.pathname === '/events') {
+async function handleApi(req, res, pathname) {
+  if (req.method === 'GET' && pathname === '/api/status') return json(res, 200, publicState());
+  if (req.method === 'GET' && pathname === '/api/network') return json(res, 200, await observedNetwork());
+  if (req.method === 'GET' && pathname === '/api/events') {
     res.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
       Connection: 'keep-alive',
       'X-Accel-Buffering': 'no'
     });
-    res.write(`event: status\ndata: ${JSON.stringify(publicStatus())}\n\n`);
+    res.write(`event: state\ndata: ${JSON.stringify(publicState())}\n\n`);
+    for (const entry of logBuffer.slice(-100)) res.write(`event: log\ndata: ${JSON.stringify(entry)}\n\n`);
     sseClients.add(res);
     req.on('close', () => sseClients.delete(res));
     return;
   }
-
-  if (req.method === 'GET') {
-    serveStatic(req, res, url.pathname);
-    return;
+  if (req.method === 'POST' && pathname === '/api/validate-address') {
+    const body = await readJson(req);
+    return json(res, 200, { valid: validateBitcoinAddress(body.address) });
   }
+  if (req.method === 'POST' && pathname === '/api/start') {
+    try {
+      const body = await readJson(req);
+      startMiner({
+        address: String(body.address || ''),
+        worker: String(body.worker || 'ricky'),
+        pool: String(body.pool || ''),
+        threads: Number(body.threads) || 1
+      });
+      return json(res, 200, { ok: true, state: publicState() });
+    } catch (error) {
+      return json(res, 400, { error: error.message });
+    }
+  }
+  if (req.method === 'POST' && pathname === '/api/stop') {
+    stopMiner('Stopped');
+    return json(res, 200, { ok: true });
+  }
+  if (req.method === 'POST' && pathname === '/api/clear-records') {
+    const lifetimeHashes = state.lifetimeHashes;
+    state.records = [];
+    state.bestRecord = null;
+    state.worstRecord = null;
+    state.bestHash = null;
+    state.bestShareDifficulty = 0;
+    state.worstHash = null;
+    state.worstDifficulty = null;
+    state.currentBlock = null;
+    state.lifetimeHashes = lifetimeHashes;
+    shareEvidence.clear();
+    scheduleSave();
+    broadcastState();
+    return json(res, 200, { ok: true });
+  }
+  return json(res, 404, { error: 'Not found' });
+}
 
-  res.writeHead(405); res.end('Method not allowed');
+const server = http.createServer(async (req, res) => {
+  try {
+    const pathname = new URL(req.url, `http://${HOST}`).pathname;
+    if (pathname.startsWith('/api/')) return await handleApi(req, res, pathname);
+    return serveStatic(req, res);
+  } catch (error) {
+    console.error(error);
+    return json(res, 500, { error: error.message });
+  }
 });
 
-function shutdown() {
-  Promise.resolve(stopMiner()).finally(() => server.close(() => process.exit(0)));
-  setTimeout(() => process.exit(1), 3000).unref();
+function shutdown(signal) {
+  addLog('server', `${signal} received; shutting down.`);
+  stopMiner('Stopped');
+  for (const client of sseClients) {
+    try { client.end(); } catch (_) {}
+  }
+  sseClients = new Set();
+  server.close(() => process.exit(0));
+  setTimeout(() => process.exit(1), 2000).unref();
 }
 
 if (require.main === module) {
   server.listen(PORT, HOST, () => {
-    console.log(`Ricky Bitcoin Reward Miner v8 running at http://${HOST}:${PORT}`);
-    console.log('The dashboard shows reward eligibility only after connection, subscription, authorization, live job construction, and submission readiness are all true.');
+    const url = `http://${HOST}:${PORT}/?version=reward-v8`;
+    console.log('Ricky Bitcoin Reward Miner v8');
+    console.log(`Open: ${url}`);
+    console.log('Reward eligibility requires live authorization, a live job, and an active submission path.');
+    console.log('Press Control-C to stop.');
   });
-  process.on('SIGINT', shutdown);
-  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', () => shutdown('SIGINT'));
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
 }
 
 module.exports = {
-  validateBitcoinAddress,
   server,
-  initialState,
+  validateBitcoinAddress,
+  startMiner,
+  stopMiner,
+  publicState,
   rewardEligibility,
+  aggregateSecond,
   currentSecondStats,
-  processBatch
+  applyHashBatch,
+  ALLOWED_POOLS
 };
