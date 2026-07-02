@@ -15,6 +15,7 @@ const PUBLIC_DIR = path.join(ROOT, 'public');
 const STATE_FILE = path.join(ROOT, '.miner-state.json');
 const DEFAULT_ADDRESS = '';
 const MAX_RECORDS = 1000;
+const HASH_FRESHNESS_MS = 5000;
 const ALLOWED_POOLS = new Set([
   'stratum+tcp://solo.stratum.braiins.com:3333',
   'stratum+tcp://solo.stratum.braiins.com:443',
@@ -84,6 +85,10 @@ function initialState(history = emptyHistory()) {
     generation: null,
     currentWork: null,
     hashrateHps: 0,
+    lastHashBatchAt: null,
+    lastHashJobId: null,
+    lastHashGeneration: null,
+    lastHashCount: 0,
     sessionHashes: 0,
     lifetimeHashes: Math.max(0, Number(history.lifetimeHashes) || 0),
     accepted: 0,
@@ -269,15 +274,36 @@ function evidenceKey(jobId, hash) {
   return `${jobId || ''}:${hash || ''}`;
 }
 
+function resetHashEvidence() {
+  state.lastHashBatchAt = null;
+  state.lastHashJobId = null;
+  state.lastHashGeneration = null;
+  state.lastHashCount = 0;
+}
+
+function rewardEligibilityForState(candidate, now = Date.now()) {
+  if (!candidate.running) return { eligible: false, reason: 'Miner stopped' };
+  if (!candidate.connected) return { eligible: false, reason: 'Waiting for pool connection' };
+  if (!candidate.subscribed) return { eligible: false, reason: 'Waiting for Stratum subscription' };
+  if (!candidate.authorized) return { eligible: false, reason: 'Waiting for pool authorization' };
+  if (!candidate.jobId) return { eligible: false, reason: 'Waiting for a live Bitcoin job' };
+  if (!candidate.networkTarget || !candidate.currentWork) return { eligible: false, reason: 'Live job is not fully constructed' };
+  if (!candidate.submissionReady) return { eligible: false, reason: 'Submission path is not ready' };
+  if (!(Number(candidate.lastHashCount) > 0)) return { eligible: false, reason: 'Waiting for fresh hashing evidence' };
+  if (candidate.lastHashJobId !== candidate.jobId) return { eligible: false, reason: 'Waiting for hashing on the current live job' };
+  if ((candidate.lastHashGeneration ?? null) !== (candidate.generation ?? null)) {
+    return { eligible: false, reason: 'Waiting for hashing on the current job generation' };
+  }
+  const lastHashBatchAt = Number(candidate.lastHashBatchAt);
+  const hashAgeMs = Number(now) - lastHashBatchAt;
+  if (!Number.isFinite(lastHashBatchAt) || lastHashBatchAt <= 0 || !Number.isFinite(hashAgeMs) || hashAgeMs < 0 || hashAgeMs > HASH_FRESHNESS_MS) {
+    return { eligible: false, reason: 'Waiting for a fresh hash batch' };
+  }
+  return { eligible: true, reason: 'Authorized live Stratum work with fresh hashing and an active submission path' };
+}
+
 function rewardEligibility() {
-  if (!state.running) return { eligible: false, reason: 'Miner stopped' };
-  if (!state.connected) return { eligible: false, reason: 'Waiting for pool connection' };
-  if (!state.subscribed) return { eligible: false, reason: 'Waiting for Stratum subscription' };
-  if (!state.authorized) return { eligible: false, reason: 'Waiting for pool authorization' };
-  if (!state.jobId) return { eligible: false, reason: 'Waiting for a live Bitcoin job' };
-  if (!state.networkTarget || !state.currentWork) return { eligible: false, reason: 'Live job is not fully constructed' };
-  if (!state.submissionReady) return { eligible: false, reason: 'Submission path is not ready' };
-  return { eligible: true, reason: 'Authorized live Stratum work with an active submission path' };
+  return rewardEligibilityForState(state);
 }
 
 function ensureBucket(second) {
@@ -484,6 +510,14 @@ function applyHashBatch(batch) {
   const lifetimeBefore = state.lifetimeHashes;
   const blockBefore = Number(block.hashes) || 0;
   const count = Number(batch.count) || 0;
+  const sameJob = Boolean(state.jobId) && batch.jobId === state.jobId;
+  const sameGeneration = (batch.generation ?? null) === (state.generation ?? null);
+  if (count > 0 && sameJob && sameGeneration) {
+    state.lastHashBatchAt = Date.now();
+    state.lastHashJobId = batch.jobId;
+    state.lastHashGeneration = batch.generation ?? null;
+    state.lastHashCount = count;
+  }
 
   const candidates = Array.isArray(batch.recordCandidates)
     ? [...batch.recordCandidates].sort((left, right) => Number(left.offset) - Number(right.offset))
@@ -614,6 +648,7 @@ function stopMiner(reason = 'Stopped') {
   state.authorized = false;
   state.submissionReady = false;
   state.hashrateHps = 0;
+  resetHashEvidence();
   state.stoppedAt = Date.now();
   state.error = reason === 'Stopped' ? null : reason;
   addLog('server', reason);
@@ -658,6 +693,7 @@ function startMiner(config) {
       state.submissionReady = false;
       state.jobId = null;
       state.currentWork = null;
+      resetHashEvidence();
     }
     broadcastState();
   });
@@ -675,6 +711,7 @@ function startMiner(config) {
     broadcastState();
   });
   miner.on('job', job => {
+    resetHashEvidence();
     state.jobId = job.jobId;
     state.jobReceivedAt = Date.now();
     state.generation = job.generation;
@@ -709,6 +746,7 @@ function startMiner(config) {
     state.authorized = false;
     state.submissionReady = false;
     state.hashrateHps = 0;
+    resetHashEvidence();
     broadcastState();
   });
 
@@ -910,6 +948,8 @@ module.exports = {
   stopMiner,
   publicState,
   rewardEligibility,
+  rewardEligibilityForState,
+  HASH_FRESHNESS_MS,
   aggregateSecond,
   currentSecondStats,
   applyHashBatch,
