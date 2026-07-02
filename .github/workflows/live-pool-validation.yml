@@ -1,0 +1,200 @@
+name: One-time live pool validation
+
+on:
+  push:
+    branches:
+      - merge/v6-reward-v7-dashboard-20260701
+    paths:
+      - .github/workflows/live-pool-validation.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-live-stratum:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Connect, authorize, receive work, and verify submission response
+        shell: bash
+        run: |
+          node <<'NODE'
+          'use strict';
+
+          const net = require('net');
+          const { buildWork, difficultyToTarget, sha256d } = require('./lib/stratum-miner');
+
+          const host = 'solo.stratum.braiins.com';
+          const ports = [3333, 443, 25];
+          const username = '1BitcoinEaterAddressDontSendf59kuE.chatgpt-live-validation';
+          const password = 'x';
+
+          function displayValue(rawHash) {
+            return BigInt(`0x${Buffer.from(rawHash).reverse().toString('hex')}`);
+          }
+
+          function validateEndpoint(port) {
+            return new Promise((resolve, reject) => {
+              const result = {
+                host,
+                port,
+                connected: false,
+                subscribed: false,
+                authorized: false,
+                jobReceived: false,
+                submissionSent: false,
+                submissionResponded: false,
+                submissionAccepted: null,
+                submissionError: null,
+                poolDifficulty: 1,
+                jobId: null
+              };
+              let buffer = '';
+              let extranonce1 = null;
+              let extranonce2Size = null;
+              let job = null;
+              let finished = false;
+              const socket = net.createConnection({ host, port });
+              socket.setEncoding('utf8');
+              socket.setNoDelay(true);
+
+              const timer = setTimeout(() => finish(new Error(`Timeout on ${host}:${port}`)), 45000);
+
+              function finish(error) {
+                if (finished) return;
+                finished = true;
+                clearTimeout(timer);
+                socket.destroy();
+                if (error) reject(Object.assign(error, { validation: result }));
+                else resolve(result);
+              }
+
+              function send(payload) {
+                socket.write(`${JSON.stringify(payload)}\n`);
+              }
+
+              function maybeSubmit() {
+                if (result.submissionSent || !result.subscribed || !result.authorized || !job || extranonce1 == null || !Number.isInteger(extranonce2Size)) return;
+                try {
+                  const extranonce2 = ''.padStart(extranonce2Size * 2, '0');
+                  const built = buildWork(job, extranonce1, extranonce2);
+                  const shareTarget = difficultyToTarget(result.poolDifficulty);
+                  const header = Buffer.alloc(80);
+                  built.headerPrefix.copy(header, 0);
+                  let chosenNonce = null;
+                  for (let nonce = 0; nonce < 10000; nonce += 1) {
+                    header.writeUInt32LE(nonce >>> 0, 76);
+                    if (displayValue(sha256d(header)) > shareTarget) {
+                      chosenNonce = nonce >>> 0;
+                      break;
+                    }
+                  }
+                  if (chosenNonce == null) throw new Error('Could not construct a guaranteed non-qualifying validation share');
+                  result.submissionSent = true;
+                  send({
+                    id: 99,
+                    method: 'mining.submit',
+                    params: [username, job.jobId, extranonce2, job.ntime, chosenNonce.toString(16).padStart(8, '0')]
+                  });
+                } catch (error) {
+                  finish(error);
+                }
+              }
+
+              socket.on('connect', () => {
+                result.connected = true;
+                send({ id: 1, method: 'mining.subscribe', params: ['ricky-node-miner-live-validation/8.0.0'] });
+                send({ id: 2, method: 'mining.authorize', params: [username, password] });
+              });
+
+              socket.on('data', chunk => {
+                buffer += chunk;
+                const lines = buffer.split('\n');
+                buffer = lines.pop() || '';
+                for (const line of lines) {
+                  if (!line.trim()) continue;
+                  let message;
+                  try { message = JSON.parse(line); }
+                  catch (error) { return finish(new Error(`Invalid JSON from pool: ${error.message}`)); }
+
+                  if (message.method === 'mining.set_difficulty') {
+                    result.poolDifficulty = message.params?.[0] ?? result.poolDifficulty;
+                    maybeSubmit();
+                    continue;
+                  }
+                  if (message.method === 'mining.notify') {
+                    const params = Array.isArray(message.params) ? message.params : [];
+                    if (params.length >= 9) {
+                      job = {
+                        jobId: String(params[0]),
+                        prevhash: String(params[1]),
+                        coinb1: String(params[2]),
+                        coinb2: String(params[3]),
+                        merkleBranch: Array.isArray(params[4]) ? params[4].map(String) : [],
+                        version: String(params[5]),
+                        nbits: String(params[6]),
+                        ntime: String(params[7]),
+                        cleanJobs: Boolean(params[8])
+                      };
+                      result.jobReceived = true;
+                      result.jobId = job.jobId;
+                      maybeSubmit();
+                    }
+                    continue;
+                  }
+                  if (message.id === 1) {
+                    if (message.error || !Array.isArray(message.result)) return finish(new Error(`Subscription rejected: ${JSON.stringify(message.error || message.result)}`));
+                    extranonce1 = String(message.result[1] || '');
+                    extranonce2Size = Number(message.result[2]);
+                    result.subscribed = true;
+                    maybeSubmit();
+                    continue;
+                  }
+                  if (message.id === 2) {
+                    result.authorized = message.result === true && !message.error;
+                    if (!result.authorized) return finish(new Error(`Authorization rejected: ${JSON.stringify(message.error || message.result)}`));
+                    maybeSubmit();
+                    continue;
+                  }
+                  if (message.id === 99) {
+                    result.submissionResponded = true;
+                    result.submissionAccepted = message.result === true && !message.error;
+                    result.submissionError = message.error || (message.result === true ? null : message.result);
+                    return finish();
+                  }
+                }
+              });
+
+              socket.on('error', error => finish(error));
+              socket.on('close', () => {
+                if (!finished) finish(new Error(`Connection closed before validation completed on ${host}:${port}`));
+              });
+            });
+          }
+
+          (async () => {
+            const failures = [];
+            for (const port of ports) {
+              try {
+                const result = await validateEndpoint(port);
+                console.log('LIVE_POOL_VALIDATION_RESULT');
+                console.log(JSON.stringify(result, null, 2));
+                if (!result.connected || !result.subscribed || !result.authorized || !result.jobReceived || !result.submissionSent || !result.submissionResponded) {
+                  throw new Error('Live validation did not reach every required state');
+                }
+                process.exit(0);
+              } catch (error) {
+                failures.push({ port, message: error.message, validation: error.validation || null });
+                console.error(`Port ${port} failed: ${error.message}`);
+              }
+            }
+            console.error('LIVE_POOL_VALIDATION_FAILURES');
+            console.error(JSON.stringify(failures, null, 2));
+            process.exit(1);
+          })();
+          NODE
