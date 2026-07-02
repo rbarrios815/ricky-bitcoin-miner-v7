@@ -1,0 +1,1 @@
+This branch adds complete record metadata and correct reset scopes for v7.
