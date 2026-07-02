@@ -15,11 +15,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 CACHE = {"at": 0.0, "payload": None}
+CACHE_SECONDS = 15
 
 
 def fetch_json_or_text(url: str, timeout: float = 8.0):
-    req = urllib.request.Request(url, headers={"User-Agent": "RickyMinerV7/1.0"})
-    with urllib.request.urlopen(req, timeout=timeout) as response:
+    request = urllib.request.Request(url, headers={"User-Agent": "RickyMinerV7/1.1"})
+    with urllib.request.urlopen(request, timeout=timeout) as response:
         raw = response.read().decode("utf-8")
     try:
         return json.loads(raw)
@@ -29,17 +30,26 @@ def fetch_json_or_text(url: str, timeout: float = 8.0):
 
 def network_payload() -> dict:
     now = time.time()
-    if CACHE["payload"] and now - CACHE["at"] < 300:
+    if CACHE["payload"] and now - CACHE["at"] < CACHE_SECONDS:
         return CACHE["payload"]
 
     difficulty = None
     height = None
-    sources = []
+    tip_hash = None
+    sources: list[str] = []
 
     try:
         data = fetch_json_or_text("https://mempool.space/api/v1/mining/hashrate/1m")
         if isinstance(data, dict):
             difficulty = data.get("currentDifficulty") or data.get("difficulty")
+            sources.append("mempool.space")
+    except Exception:
+        pass
+
+    try:
+        height = int(fetch_json_or_text("https://mempool.space/api/blocks/tip/height"))
+        tip_hash = str(fetch_json_or_text("https://mempool.space/api/blocks/tip/hash"))
+        if "mempool.space" not in sources:
             sources.append("mempool.space")
     except Exception:
         pass
@@ -51,16 +61,20 @@ def network_payload() -> dict:
         except Exception:
             pass
 
-    try:
-        height = int(fetch_json_or_text("https://blockchain.info/q/getblockcount"))
-    except Exception:
-        pass
+    if height is None:
+        try:
+            height = int(fetch_json_or_text("https://blockchain.info/q/getblockcount"))
+            if "blockchain.info" not in sources:
+                sources.append("blockchain.info")
+        except Exception:
+            pass
 
     network_hashrate = float(difficulty) * (2**32) / 600 if difficulty else None
     payload = {
         "difficulty": float(difficulty) if difficulty else None,
         "networkHashrate": network_hashrate,
         "height": height,
+        "tipHash": tip_hash,
         "sources": sources,
         "fetchedAt": int(now * 1000),
     }
