@@ -63,8 +63,8 @@ function render() {
     $('secWorstHash').textContent = bucket.worst?.hash || '—';
 
     if (bucket.best && bucket.worst) {
-      const bestPrefix = BigInt(0x + bucket.best.hash.slice(0, 16));
-      const worstPrefix = BigInt(0x + bucket.worst.hash.slice(0, 16));
+      const bestPrefix = BigInt(`0x${bucket.best.hash.slice(0, 16)}`);
+      const worstPrefix = BigInt(`0x${bucket.worst.hash.slice(0, 16)}`);
       const span = Number(worstPrefix - bestPrefix) / Number(0xffffffffffffffffn) * 100;
       $('secSpan').textContent = `${span.toFixed(3)}%`;
     } else {
