@@ -1,0 +1,15 @@
+{
+  "name": "ricky-bitcoin-miner-reward",
+  "version": "8.0.0",
+  "private": true,
+  "description": "Local reward-eligible Bitcoin Stratum CPU miner with exact mining telemetry and persistent records.",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node tests.js",
+    "check": "node --check server.js && node --check lib/stratum-miner.js && node --check lib/hash-worker.js && node --check public/app.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT"
+}

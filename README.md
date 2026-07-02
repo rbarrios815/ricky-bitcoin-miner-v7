@@ -1,52 +1,64 @@
-# Ricky Bitcoin Mining Control Center v7
+# Ricky Bitcoin Reward Miner v8
 
-A local browser-based SHA-256d hashing measurement dashboard with persistent record history.
+This is the merged reward-mode build:
 
-## Start on Mac
+- **v6 remains authoritative for real mining:** raw TCP Stratum V1 connection, subscription, authorization, live job construction, Bitcoin double-SHA-256 hashing, share-target checking, and `mining.submit`.
+- **v7 supplies the measurement system:** best/median/worst hash for the measured second, persistent lifetime records, exact timestamps and work context, current-block scope, progress chart, and CSV evidence export.
 
-1. Clone or download the repository.
-2. Open Terminal in the project folder.
-3. Run:
+There is no synthetic mining mode in the dashboard. The green **REWARD-ELIGIBLE WORK ACTIVE** badge appears only while all of these are true:
+
+1. The pool TCP connection is active.
+2. Stratum subscription succeeded.
+3. The payout worker was authorized.
+4. A live Bitcoin job was received and constructed.
+5. The worker is hashing that live header space.
+6. The `mining.submit` path is writable for that job.
+
+If any condition fails, the badge turns off immediately.
+
+## Start on Ricky's Mac
 
 ```bash
-chmod +x start.command tests/run_tests.sh
+chmod +x start.command
 ./start.command
 ```
 
-The dashboard opens at `http://127.0.0.1:8791/?version=v7`.
+Open: `http://127.0.0.1:8791/?version=reward-v8`
 
-## Measurement scopes
+Node.js 18 or newer is the only runtime dependency.
 
-| Scope | Reset rule |
-|---|---|
-| Current second | Starts a new bucket each second |
-| Current network block | Resets when `/api/network` reports a changed Bitcoin tip hash or height |
-| Current session | Resets only when **Reset session** is pressed |
-| Lifetime | Persists in browser `localStorage` until records are explicitly cleared |
+## What is recorded
 
-A session reset does not erase the current-block counter or lifetime records. A new Bitcoin tip resets current-block statistics but does not erase session or lifetime history.
+The local `.miner-state.json` file stores:
 
-## Record-breaking hash history
+- lifetime hash count
+- every lifetime best-hash record
+- exact timestamp and full hash
+- previous record and improvement multiplier
+- session/lifetime/current-block hash numbers
+- live job ID, generation, extranonce2, ntime, version, worker, and nonce
+- pool and network targets
+- whether the work was reward-eligible when hashed
+- real submission and pool acceptance/rejection outcomes
 
-Each new record stores the exact timestamp, full hash and difficulty, previous record, improvement multiplier, network snapshot, percentage of the displayed network target, session/lifetime/current-block counts, local job and nonce details, outcome status, hashrate, and runtime.
+The file is ignored by Git and contains no private key or seed phrase.
 
-Old v7 records are migrated when possible. Fields never captured by earlier versions remain unavailable rather than being invented. CSV export contains the complete stored schema.
+## Safety and reality
 
-## Important eligibility boundary
-
-This repository performs real double-SHA-256 calculations on synthetic local 80-byte headers. It is a hashing measurement dashboard, not a complete Bitcoin solo miner. It does not obtain a valid block template, connect to Stratum, submit shares, or submit a valid block.
-
-Saved records therefore truthfully use `submitted = false`, `shareAccepted = false`, `blockCandidate = false`, and `blockCandidateStatus = ineligible-synthetic-work`. Even a synthetic result above the displayed target would not qualify for a Bitcoin reward.
+- Only a **public Bitcoin payout address** is sent as the pool username.
+- Never enter a seed phrase, private key, wallet file, PIN, or xpub.
+- The web server binds only to `127.0.0.1`.
+- Pool endpoints are allowlisted in `server.js`.
+- Raw Stratum V1 is not encrypted; use only a pool endpoint you trust.
+- CPU mining on a MacBook is reward-eligible but extraordinarily unlikely to find a Bitcoin block and is not expected to be profitable.
+- A better historical hash is evidence of past luck, not cumulative progress toward the next block.
 
 ## Tests
 
 ```bash
-chmod +x tests/run_tests.sh
-tests/run_tests.sh
+npm test
 ```
 
-The suite checks JavaScript syntax, SHA-256 vectors, record schema/migration, current-block reset behavior, Python syntax, and local-server delivery.
+The suite covers known header construction, SHA-256d and target vectors, Bitcoin address checks, exact per-second telemetry, and a full local mock cycle:
 
-## Collaboration
-
-Read `COLLABORATION_HANDOFF.md` before editing. Use a narrow branch, declare file ownership, compare with latest `main`, and run the full test suite before integration.
+`subscribe → authorize → live job → hash → mining.submit → pool acceptance`
