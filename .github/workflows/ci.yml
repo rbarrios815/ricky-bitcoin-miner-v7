@@ -46,9 +46,11 @@ jobs:
           echo '9456b54ff147e628ac7e85c06ff5679d19364855dcd98082456939f673b94e9c  /tmp/reward-v8.tar.gz' | sha256sum --check --strict
           tar -xzf /tmp/reward-v8.tar.gz
 
+          # Keep workflow and transfer files out of the bot push. They are cleaned up
+          # separately through the connected GitHub integration after source lands.
+          git checkout HEAD -- .github/workflows/ci.yml
           rm -f index.html app.js app-render.js app-runtime.js miner-worker.js record-utils.js sha256.js server.py
-          rm -rf tests tools .integration
-          rm -f .github/workflows/apply-reward-v8.yml
+          rm -rf tests tools
 
           echo 'applied=true' >> "$GITHUB_OUTPUT"
 
@@ -71,7 +73,7 @@ jobs:
             tests/run_tests.sh
           fi
 
-      - name: Commit applied integration
+      - name: Commit applied integration source
         if: steps.apply.outputs.applied == 'true'
         shell: bash
         run: |
@@ -79,5 +81,11 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
+
+          if git diff --cached --quiet; then
+            echo 'Integration source is already applied.'
+            exit 0
+          fi
+
           git commit -m 'feat: merge v6 reward engine with v7 telemetry'
           git push origin HEAD:${{ github.event.pull_request.head.ref }}
