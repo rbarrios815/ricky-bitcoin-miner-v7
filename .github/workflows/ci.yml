@@ -20,7 +20,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-      - name: Extract and run isolated repair
+      - name: Extract repair script
         run: |
           python - <<'PY'
           from pathlib import Path
@@ -30,7 +30,15 @@ jobs:
           script = '\n'.join(line[10:] if line.startswith('          ') else line for line in lines[start:end]) + '\n'
           Path('/tmp/repair_event_bridge.py').write_text(script)
           PY
-          python /tmp/repair_event_bridge.py
+      - name: Run isolated repair
+        run: python /tmp/repair_event_bridge.py > repair-output.txt 2>&1
+      - name: Upload repair diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bridge-repair-output
+          path: repair-output.txt
+          if-no-files-found: error
       - run: git diff --check
       - run: npm run check
       - run: npm test
