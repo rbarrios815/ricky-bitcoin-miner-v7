@@ -210,6 +210,11 @@ async function main() {
 
   const html = require('fs').readFileSync(require('path').join(__dirname, 'public', 'index.html'), 'utf8');
   assert.ok(html.includes('Start reward-eligible attempt'));
+  assert.ok(html.includes('BUILD: UI/API FIX 2 · LOCAL PORT 8792'));
+  const launcherSource = require('fs').readFileSync(require('path').join(__dirname, 'start.command'), 'utf8');
+  assert.ok(launcherSource.includes('PORT=8792'));
+  assert.ok(launcherSource.includes('/api/status'));
+  assert.ok(launcherSource.includes('reward-v8-ui-fix2'));
   const appSource = require('fs').readFileSync(require('path').join(__dirname, 'public', 'app.js'), 'utf8');
   assert.ok(appSource.includes('REWARD-ELIGIBLE WORK ACTIVE'));
   assert.ok(appSource.includes("new EventSource('/api/events')"));
