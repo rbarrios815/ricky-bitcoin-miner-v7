@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   validate-live-stratum:
@@ -17,6 +17,9 @@ jobs:
     timeout-minutes: 6
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
@@ -26,6 +29,7 @@ jobs:
           node <<'NODE'
           'use strict';
 
+          const fs = require('fs');
           const net = require('net');
           const { buildWork, difficultyToTarget, sha256d } = require('./lib/stratum-miner');
 
@@ -33,6 +37,14 @@ jobs:
           const ports = [3333, 443, 25];
           const username = '1BitcoinEaterAddressDontSendf59kuE.chatgpt-live-validation';
           const password = 'x';
+
+          function writeEvidence(payload) {
+            fs.writeFileSync('LIVE_POOL_VALIDATION_RESULT.json', `${JSON.stringify({
+              ...payload,
+              recordedAt: new Date().toISOString(),
+              testedCommit: process.env.GITHUB_SHA || null
+            }, null, 2)}\n`);
+          }
 
           function displayValue(rawHash) {
             return BigInt(`0x${Buffer.from(rawHash).reverse().toString('hex')}`);
@@ -187,6 +199,7 @@ jobs:
                 if (!result.connected || !result.subscribed || !result.authorized || !result.jobReceived || !result.submissionSent || !result.submissionResponded) {
                   throw new Error('Live validation did not reach every required state');
                 }
+                writeEvidence({ passed: true, result, failures });
                 process.exit(0);
               } catch (error) {
                 failures.push({ port, message: error.message, validation: error.validation || null });
@@ -195,6 +208,21 @@ jobs:
             }
             console.error('LIVE_POOL_VALIDATION_FAILURES');
             console.error(JSON.stringify(failures, null, 2));
+            writeEvidence({ passed: false, failures });
             process.exit(1);
           })();
           NODE
+      - name: Commit validation evidence
+        if: always()
+        shell: bash
+        run: |
+          if [ ! -f LIVE_POOL_VALIDATION_RESULT.json ]; then
+            printf '%s\n' '{"passed":false,"failures":[{"message":"Validation ended before evidence could be written"}]}' > LIVE_POOL_VALIDATION_RESULT.json
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add LIVE_POOL_VALIDATION_RESULT.json
+          if ! git diff --cached --quiet; then
+            git commit -m 'test: record live pool validation result'
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          fi
