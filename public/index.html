@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#07111f">
+  <title>Ricky Bitcoin Reward Miner v8</title>
+  <link rel="stylesheet" href="/styles.css?v=8.0.0">
+  <link rel="stylesheet" href="/dashboard-enhancements.css?v=8.2.0">
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div>
+      <p class="eyebrow">LIVE STRATUM MAINNET MINER</p>
+      <h1>Ricky Bitcoin Reward Miner v8</h1>
+      <p class="subtitle">v6’s real mining engine plus v7’s per-second measurements, persistent record evidence, current-block scope, and CSV export.</p>
+      <p class="subtitle"><strong>BUILD: UI/API FIX 2 · LOCAL PORT 8792</strong></p>
+      <p class="subtitle"><strong>BUILD: ELIGIBILITY GENERATION FIX 3</strong></p>
+      <p class="subtitle"><strong>BUILD: CENTRAL TIME + MINUTE PROGRESS 4</strong></p>
+    </div>
+    <div class="badges">
+      <span id="helperBadge" class="badge neutral">Checking local helper…</span>
+      <span id="eligibilityBadge" class="badge bad">NOT REWARD ELIGIBLE</span>
+    </div>
+  </header>
+
+  <section id="eligibilityNotice" class="notice danger">
+    <strong>Not reward eligible:</strong> <span id="eligibilityReason">Miner stopped</span>
+  </section>
+
+  <main class="grid">
+    <section class="panel controls full">
+      <div class="section-head">
+        <div>
+          <div class="label">Reward-mode controls</div>
+          <h2>Live Bitcoin Stratum attempt</h2>
+        </div>
+        <div id="nativeStatus" class="status-text">Stopped</div>
+      </div>
+      <div class="control-grid">
+        <label class="wide-control">Bitcoin payout address
+          <input id="address" autocomplete="off" spellcheck="false" value="" placeholder="Enter your public Bitcoin mainnet address">
+          <span id="addressStatus" class="field-note">Enter and verify your payout address.</span>
+        </label>
+        <label>Worker name
+          <input id="workerName" maxlength="32" value="ricky">
+        </label>
+        <label>CPU threads
+          <input id="threads" min="1" step="1" type="number" value="1">
+        </label>
+        <label class="wide-control">Solo pool endpoint
+          <select id="pool">
+            <option value="stratum+tcp://solo.stratum.braiins.com:3333">Braiins Solo — port 3333</option>
+            <option value="stratum+tcp://solo.stratum.braiins.com:443">Braiins Solo — port 443</option>
+            <option value="stratum+tcp://solo.stratum.braiins.com:25">Braiins Solo — port 25</option>
+          </select>
+        </label>
+      </div>
+      <div class="row">
+        <button id="startBtn" class="primary">Start reward-eligible attempt</button>
+        <button id="stopBtn" class="danger" disabled>Stop</button>
+        <button id="exportBtn">Export records CSV</button>
+        <button id="clearRecordsBtn" class="danger subtle">Clear saved records</button>
+      </div>
+      <p class="field-note">Only the public Bitcoin mainnet payout address you explicitly enter is used. Never enter a seed phrase, private key, PIN, xpub, or wallet file.</p>
+    </section>
+
+    <section class="panel stat"><div class="label">Current hashrate</div><div id="hashrate" class="value">0 H/s</div><div class="sub">Real SHA-256d attempts on the current live job.</div></section>
+    <section class="panel stat"><div class="label">Session hashes</div><div id="sessionHashes" class="value">0</div><div class="sub">Resets when a new attempt starts.</div></section>
+    <section class="panel stat"><div class="label">Lifetime hashes</div><div id="lifetimeHashes" class="value">0</div><div class="sub">Persists locally across restarts.</div></section>
+    <section class="panel stat"><div class="label">Runtime</div><div id="runtime" class="value">0s</div><div class="sub">Elapsed time for this attempt.</div></section>
+
+    <section class="panel stat"><div class="label">Best hash · current second</div><div id="secBestDiff" class="value blue">—</div><div id="secBestHash" class="hash">—</div></section>
+    <section class="panel stat"><div class="label">Median · current second</div><div id="secMedian" class="value amber">—</div><div id="secMedianHash" class="hash">—</div></section>
+    <section class="panel stat"><div class="label">Worst hash · current second</div><div id="secWorstDiff" class="value red">—</div><div id="secWorstHash" class="hash">—</div></section>
+    <section class="panel stat"><div class="label">Hashes in measured second</div><div id="secCount" class="value">0</div><div id="secClock" class="sub">Waiting for live hashes.</div></section>
+
+    <section class="panel full">
+      <div class="section-head">
+        <div><div class="label">Current Bitcoin block-work scope</div><h2>Resets when Stratum supplies a different previous-block hash</h2></div>
+        <div id="blockKey" class="hash">No live block work</div>
+      </div>
+      <div class="stats-strip">
+        <div class="mini"><span>Observed height</span><strong id="blockHeight">Unknown</strong></div>
+        <div class="mini"><span>Hashes in this scope</span><strong id="blockHashes">0</strong></div>
+        <div class="mini"><span>Best in this scope</span><strong id="blockBest">—</strong></div>
+        <div class="mini"><span>Tracked for</span><strong id="blockAge">—</strong></div>
+        <div class="mini"><span>Live job ID</span><strong id="jobId" class="hash small">—</strong></div>
+      </div>
+    </section>
+
+    <section class="panel wide"><div class="label">Best hash · lifetime</div><div id="bestDifficulty" class="value green">—</div><div id="bestHash" class="hash">—</div><div id="bestMeta" class="sub">No record yet.</div></section>
+    <section class="panel wide"><div class="label">Worst hash · lifetime</div><div id="worstDifficulty" class="value red">—</div><div id="worstHash" class="hash">—</div><div id="worstMeta" class="sub">No record yet.</div></section>
+
+    <section class="panel full">
+      <div class="section-head">
+        <div><div class="label">Live protocol and submission status</div><h2>Eligibility evidence</h2></div>
+      </div>
+      <div class="stats-strip">
+        <div class="mini"><span>TCP</span><strong id="connectionState">Disconnected</strong></div>
+        <div class="mini"><span>Subscribed</span><strong id="subscriptionState">No</strong></div>
+        <div class="mini"><span>Authorized</span><strong id="authorizationState">No</strong></div>
+        <div class="mini"><span>Submission ready</span><strong id="submissionState">No</strong></div>
+        <div class="mini"><span>Pool difficulty</span><strong id="poolDifficulty">—</strong></div>
+        <div class="mini"><span>Network difficulty</span><strong id="networkDifficulty">—</strong></div>
+        <div class="mini"><span>Shares submitted</span><strong id="sharesSubmitted">0</strong></div>
+        <div class="mini"><span>Accepted / rejected</span><strong id="shareResults">0 / 0</strong></div>
+        <div class="mini"><span>Block candidates</span><strong id="blockCandidates">0</strong></div>
+      </div>
+      <div class="target-row"><span>Network target</span><code id="networkTarget">—</code></div>
+    </section>
+
+    <section class="panel full">
+      <div class="section-head">
+        <div><div class="label">Record quality over time</div><h2>Best-share difficulty chart</h2></div>
+        <div id="networkStatus" class="sub">Loading observed network height…</div>
+      </div>
+      <canvas id="chart" width="1300" height="340"></canvas>
+      <div class="stats-strip">
+        <div class="mini"><span>Gap to pool share</span><strong id="gapPool">—</strong></div>
+        <div class="mini"><span>Gap to Bitcoin target</span><strong id="gapNetwork">—</strong></div>
+        <div class="mini"><span>Best as % of target</span><strong id="targetPercent">—</strong></div>
+        <div class="mini"><span>Time since best</span><strong id="sinceBest">—</strong></div>
+        <div class="mini"><span>Average record interval</span><strong id="avgRecordTime">—</strong></div>
+      </div>
+    </section>
+
+    <section class="panel full">
+      <div class="section-head">
+        <div><div class="label">Persistent exact evidence</div><h2>Every lifetime record-breaking hash</h2></div>
+        <div class="sub">Stored locally in <code>.miner-state.json</code></div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th>Timestamp</th><th>Difficulty</th><th>Hash</th><th>Previous</th><th>Improvement</th>
+            <th>Network / target %</th><th>Counts S / L / B</th><th>Live job context</th>
+            <th>Submission outcome</th><th>Candidate</th><th>Performance</th>
+          </tr></thead>
+          <tbody id="recordBody"><tr><td colspan="11">No record-breaking hashes yet.</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel full">
+      <div class="section-head"><div><div class="label">Live log</div><h2>Pool and miner events</h2></div><button id="clearLogBtn">Clear visible log</button></div>
+      <pre id="log">Waiting for the local helper…</pre>
+    </section>
+
+    <section class="notice warning full">
+      <strong>Reality check:</strong> This build performs reward-eligible work only while the green eligibility badge is active. A MacBook’s hashrate makes finding a Bitcoin block extraordinarily unlikely, and a record-breaking hash is not accumulated progress toward a future block.
+    </section>
+  </main>
+  <footer>Local-only server on 127.0.0.1. Accepted shares and candidates are reported from actual pool responses, not simulated.</footer>
+</div>
+<script src="/dashboard-enhancements.js?v=8.2.0"></script>
+<script src="/app.js?v=8.1-ui-fix2"></script>
+</body>
+</html>
