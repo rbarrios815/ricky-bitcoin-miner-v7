@@ -1,0 +1,351 @@
+name: Repair miner event bridge
+
+on:
+  push:
+    branches: ['merge/v6-reward-v7-dashboard-20260701']
+    paths: ['.github/workflows/repair-event-bridge.yml']
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Apply event bridge and regression test
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import json
+
+          miner_path = Path('lib/stratum-miner.js')
+          source = miner_path.read_text()
+
+          def replace_once(old, new):
+              global source
+              count = source.count(old)
+              if count != 1:
+                  raise SystemExit(f'Expected exactly one match, found {count}: {old[:100]!r}')
+              source = source.replace(old, new, 1)
+
+          replace_once(
+          """          this.shareTarget = difficultyToTarget(this.currentDifficulty);
+          this.emit('log', `Pool share difficulty set to ${this.currentDifficulty}.`);""",
+          """          this.shareTarget = difficultyToTarget(this.currentDifficulty);
+          this.emit('difficulty', Number(this.currentDifficulty) || null);
+          this.emit('log', `Pool share difficulty set to ${this.currentDifficulty}.`);"""
+          )
+
+          replace_once(
+          """      const result = { ...pending, timeout: undefined, accepted, error: message.error || null, respondedAt: Date.now() };
+      this.emit('submission', result);""",
+          """      const result = { ...pending, timeout: undefined, accepted, error: message.error || null, respondedAt: Date.now() };
+      this.emit('submission', result);
+      this.emit('share-result', { ...result, hash: result.hashHex, requestId: result.id });"""
+          )
+
+          replace_once(
+          """    this.currentJob = job;
+    this.jobReceivedAt = Date.now();
+    this.emit('job', {
+      ...job,
+      receivedAt: this.jobReceivedAt,
+      networkTarget: `0x${compactToTarget(job.nbits).toString(16).padStart(64, '0')}`,
+      networkDifficulty: targetToDifficulty(compactToTarget(job.nbits))
+    });""",
+          """    this.currentJob = job;
+    this.jobReceivedAt = Date.now();
+    const networkTarget = compactToTarget(job.nbits);
+    const networkTargetHex = `0x${networkTarget.toString(16).padStart(64, '0')}`;
+    this.emit('job', {
+      ...job,
+      receivedAt: this.jobReceivedAt,
+      networkTarget: networkTargetHex,
+      networkTargetHex,
+      networkDifficulty: targetToDifficulty(networkTarget)
+    });"""
+          )
+
+          replace_once(
+          """      this.emit('batch', {
+        ...message,
+        poolDifficulty: this.currentDifficulty,
+        networkDifficulty: this.networkDifficulty,
+        networkTarget: this.networkTarget ? `0x${this.networkTarget.toString(16).padStart(64, '0')}` : null,
+        shareTarget: `0x${this.shareTarget.toString(16).padStart(64, '0')}`,
+        hashesTotal: this.hashesTotal
+      });""",
+          """      const batch = {
+        ...message,
+        poolDifficulty: this.currentDifficulty,
+        networkDifficulty: this.networkDifficulty,
+        networkTarget: this.networkTarget ? `0x${this.networkTarget.toString(16).padStart(64, '0')}` : null,
+        shareTarget: `0x${this.shareTarget.toString(16).padStart(64, '0')}`,
+        hashesTotal: this.hashesTotal
+      };
+      this.emit('batch', batch);
+      this.emit('hash-batch', {
+        ...batch,
+        count: Number(batch.hashes) || 0,
+        bestHash: batch.bestHashHex || null,
+        worstHash: batch.worstHashHex || null,
+        networkTargetHex: batch.networkTarget,
+        shareTargetHex: batch.shareTarget,
+        prevhash: this.currentJob?.prevhash || null,
+        nbits: this.currentJob?.nbits || null,
+        rewardEligible: this.submissionReady()
+      });"""
+          )
+
+          replace_once(
+          """        this.emit('progress', {
+          hashrateHps,
+          hashesTotal: this.hashesTotal,
+          bestHash: this.bestHash,
+          bestDifficulty: this.bestValue ? targetToDifficulty(this.bestValue) : 0,
+          worstHash: this.worstHash,
+          worstDifficulty: this.worstValue ? targetToDifficulty(this.worstValue) : null,
+          closestPercent: this.bestValue && this.networkTarget ? ratioPercent(this.networkTarget, this.bestValue) : 0,
+          networkDifficulty: this.networkDifficulty,
+          networkTarget: this.networkTarget ? `0x${this.networkTarget.toString(16).padStart(64, '0')}` : null,
+          poolDifficulty: this.currentDifficulty
+        });""",
+          """        const progress = {
+          hashrateHps,
+          hashesTotal: this.hashesTotal,
+          bestHash: this.bestHash,
+          bestDifficulty: this.bestValue ? targetToDifficulty(this.bestValue) : 0,
+          worstHash: this.worstHash,
+          worstDifficulty: this.worstValue ? targetToDifficulty(this.worstValue) : null,
+          closestPercent: this.bestValue && this.networkTarget ? ratioPercent(this.networkTarget, this.bestValue) : 0,
+          networkDifficulty: this.networkDifficulty,
+          networkTarget: this.networkTarget ? `0x${this.networkTarget.toString(16).padStart(64, '0')}` : null,
+          poolDifficulty: this.currentDifficulty
+        };
+        this.emit('progress', progress);
+        this.emit('hashrate', progress.hashrateHps);"""
+          )
+
+          replace_once(
+          """      this.emit('share', { ...submission, sent });
+
+      if (!sent) {""",
+          """      this.emit('share', { ...submission, sent });
+      if (sent) this.emit('share-submitted', { ...submission, hash: submission.hashHex, requestId: submission.id });
+
+      if (!sent) {"""
+          )
+
+          replace_once(
+          """      if (!sent) {
+        this.emit('submission', { ...submission, accepted: false, error: 'socket-not-writable', respondedAt: Date.now() });
+        this.emit('log', 'Qualifying hash found, but the submission socket was not writable.');""",
+          """      if (!sent) {
+        const result = { ...submission, accepted: false, error: 'socket-not-writable', respondedAt: Date.now() };
+        this.emit('submission', result);
+        this.emit('share-result', { ...result, hash: result.hashHex, requestId: result.id });
+        this.emit('log', 'Qualifying hash found, but the submission socket was not writable.');"""
+          )
+
+          replace_once(
+          """        this.emit('submission', { ...submission, timeout: undefined, accepted: false, error: 'pool-response-timeout', respondedAt: Date.now() });
+        this.emit('log', 'Pool did not respond to a submitted share within 60 seconds.');""",
+          """        const result = { ...submission, timeout: undefined, accepted: false, error: 'pool-response-timeout', respondedAt: Date.now() };
+        this.emit('submission', result);
+        this.emit('share-result', { ...result, hash: result.hashHex, requestId: result.id });
+        this.emit('log', 'Pool did not respond to a submitted share within 60 seconds.');"""
+          )
+
+          replace_once(
+          """  emitStatus() {
+    this.emit('status', {
+      connected: this.connected,
+      subscribed: this.subscribed,
+      authorized: this.authorized,
+      jobId: this.currentJob?.jobId || null,
+      jobReceivedAt: this.jobReceivedAt,
+      generation: this.generation || null,
+      poolDifficulty: this.currentDifficulty,
+      networkDifficulty: this.networkDifficulty,
+      networkTarget: this.networkTarget ? `0x${this.networkTarget.toString(16).padStart(64, '0')}` : null,
+      submissionReady: this.submissionReady()
+    });
+  }""",
+          """  emitStatus() {
+    const status = {
+      connected: this.connected,
+      subscribed: this.subscribed,
+      authorized: this.authorized,
+      jobId: this.currentJob?.jobId || null,
+      jobReceivedAt: this.jobReceivedAt,
+      generation: this.generation || null,
+      poolDifficulty: this.currentDifficulty,
+      networkDifficulty: this.networkDifficulty,
+      networkTarget: this.networkTarget ? `0x${this.networkTarget.toString(16).padStart(64, '0')}` : null,
+      submissionReady: this.submissionReady()
+    };
+    this.emit('status', status);
+    this.emit('connection', status.connected);
+    this.emit('subscribed', status.subscribed);
+    this.emit('authorized', status.authorized);
+    this.emit('submission-ready', status.submissionReady);
+  }"""
+          )
+
+          replace_once(
+          """    this.currentJob = null;
+    this.jobReceivedAt = null;
+    this.emitStatus();
+  }""",
+          """    this.currentJob = null;
+    this.jobReceivedAt = null;
+    this.emitStatus();
+    this.emit('stopped');
+  }"""
+          )
+
+          miner_path.write_text(source)
+
+          test_path = Path('tests/event_bridge.test.js')
+          test_path.write_text(r'''\
+'use strict';
+
+const assert = require('assert');
+const net = require('net');
+const { StratumMiner } = require('../lib/stratum-miner');
+
+function waitFor(emitter, event, predicate = () => true, timeoutMs = 7000) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      emitter.off(event, handler);
+      reject(new Error(`Timed out waiting for ${event}`));
+    }, timeoutMs);
+    const handler = value => {
+      if (!predicate(value)) return;
+      clearTimeout(timer);
+      emitter.off(event, handler);
+      resolve(value);
+    };
+    emitter.on(event, handler);
+  });
+}
+
+async function main() {
+  let receivedSubmit = null;
+  const mock = net.createServer(socket => {
+    socket.setEncoding('utf8');
+    socket.on('error', () => {});
+    let buffer = '';
+    socket.on('data', chunk => {
+      buffer += chunk;
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        const message = JSON.parse(line);
+        if (message.method === 'mining.subscribe') {
+          socket.write(`${JSON.stringify({ id: message.id, result: [[['mining.notify', 'bridge-sub']], '01020304', 4], error: null })}\n`);
+        } else if (message.method === 'mining.authorize') {
+          socket.write(`${JSON.stringify({ id: message.id, result: true, error: null })}\n`);
+          socket.write(`${JSON.stringify({ id: null, method: 'mining.set_difficulty', params: [1e-20] })}\n`);
+          socket.write(`${JSON.stringify({
+            id: null,
+            method: 'mining.notify',
+            params: [
+              'bridge-job',
+              '0000000000000000000000000000000000000000000000000000000000000000',
+              '00',
+              '00',
+              [],
+              '20000000',
+              '207fffff',
+              Math.floor(Date.now() / 1000).toString(16).padStart(8, '0'),
+              true
+            ]
+          })}\n`);
+        } else if (message.method === 'mining.submit') {
+          receivedSubmit = message;
+          socket.write(`${JSON.stringify({ id: message.id, result: true, error: null })}\n`);
+        }
+      }
+    });
+  });
+
+  await new Promise(resolve => mock.listen(0, '127.0.0.1', resolve));
+  const { port } = mock.address();
+  const miner = new StratumMiner({
+    pool: `stratum+tcp://127.0.0.1:${port}`,
+    username: 'bc1qjuf2d7s5mfukj50pd48ruk6asxqy7c4rtgx0sx.bridge',
+    threads: 1,
+    reconnect: false,
+    chunkSize: 16
+  });
+  miner.lastRateAt = Date.now() - 1100;
+
+  const connected = waitFor(miner, 'connection', value => value === true);
+  const subscribed = waitFor(miner, 'subscribed', value => value === true);
+  const authorized = waitFor(miner, 'authorized', value => value === true);
+  const difficulty = waitFor(miner, 'difficulty', value => value === 1e-20);
+  const job = waitFor(miner, 'job', value => value.jobId === 'bridge-job' && Boolean(value.networkTargetHex));
+  const ready = waitFor(miner, 'submission-ready', value => value === true);
+  const batch = waitFor(miner, 'hash-batch', value => value.jobId === 'bridge-job');
+  const hashrate = waitFor(miner, 'hashrate', value => Number(value) > 0);
+  const submitted = waitFor(miner, 'share-submitted', value => value.jobId === 'bridge-job');
+  const result = waitFor(miner, 'share-result', value => value.jobId === 'bridge-job' && value.accepted === true);
+
+  miner.start();
+  const values = await Promise.all([connected, subscribed, authorized, difficulty, job, ready, batch, hashrate, submitted, result]);
+  const bridgeBatch = values[6];
+  const bridgeSubmission = values[8];
+  const bridgeResult = values[9];
+
+  assert.strictEqual(bridgeBatch.count, 16);
+  assert.strictEqual(typeof bridgeBatch.bestHash, 'string');
+  assert.strictEqual(typeof bridgeBatch.worstHash, 'string');
+  assert.strictEqual(bridgeBatch.networkTargetHex.startsWith('0x'), true);
+  assert.strictEqual(bridgeBatch.shareTargetHex.startsWith('0x'), true);
+  assert.strictEqual(bridgeBatch.rewardEligible, true);
+  assert.strictEqual(bridgeSubmission.requestId, bridgeSubmission.id);
+  assert.strictEqual(bridgeSubmission.hash, bridgeSubmission.hashHex);
+  assert.strictEqual(bridgeResult.requestId, bridgeResult.id);
+  assert.strictEqual(bridgeResult.hash, bridgeResult.hashHex);
+  assert.ok(receivedSubmit);
+
+  const stopped = waitFor(miner, 'stopped');
+  await miner.stop();
+  await stopped;
+  await new Promise(resolve => mock.close(resolve));
+  console.log('Event bridge test passed: v6 legacy events and v8 normalized lifecycle, telemetry, and submission events are live.');
+}
+
+main().catch(error => {
+  console.error(error);
+  process.exit(1);
+});
+''')
+
+          package_path = Path('package.json')
+          package = json.loads(package_path.read_text())
+          package['scripts']['test'] = 'node tests.js && node tests/event_bridge.test.js'
+          package['scripts']['check'] = 'node --check server.js && node --check lib/stratum-miner.js && node --check lib/hash-worker.js && node --check public/app.js && node --check tests/event_bridge.test.js'
+          package_path.write_text(json.dumps(package, indent=2) + '\n')
+          PY
+      - run: git diff --check
+      - run: npm run check
+      - run: npm test
+      - name: Commit repair
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add lib/stratum-miner.js tests/event_bridge.test.js package.json
+          git commit -m 'fix: bridge v6 miner events into v8 server'
+          git push origin HEAD:${{ github.ref_name }}
