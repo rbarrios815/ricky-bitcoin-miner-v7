@@ -36,8 +36,8 @@
       </div>
       <div class="control-grid">
         <label class="wide-control">Bitcoin payout address
-          <input id="address" autocomplete="off" spellcheck="false" value="bc1qjuf2d7s5mfukj50pd48ruk6asxqy7c4rtgx0sx">
-          <span id="addressStatus" class="field-note">Validating…</span>
+          <input id="address" autocomplete="off" spellcheck="false" value="" placeholder="Enter your public Bitcoin mainnet address">
+          <span id="addressStatus" class="field-note">Enter and verify your payout address.</span>
         </label>
         <label>Worker name
           <input id="workerName" maxlength="32" value="ricky">
@@ -59,7 +59,7 @@
         <button id="exportBtn">Export records CSV</button>
         <button id="clearRecordsBtn" class="danger subtle">Clear saved records</button>
       </div>
-      <p class="field-note">Only a public payout address is used. Never enter a seed phrase, private key, PIN, or wallet file.</p>
+      <p class="field-note">Only the public Bitcoin mainnet payout address you explicitly enter is used. Never enter a seed phrase, private key, PIN, xpub, or wallet file.</p>
     </section>
 
     <section class="panel stat"><div class="label">Current hashrate</div><div id="hashrate" class="value">0 H/s</div><div class="sub">Real SHA-256d attempts on the current live job.</div></section>
