@@ -8,7 +8,7 @@ on:
       - .github/workflows/build-mac-download.yml
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   package:
@@ -18,12 +18,18 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: 1394a9b467c3663f1600a8d2dba44d3e7efef1a0
+          path: source
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-      - run: npm run check
-      - run: npm test
+      - name: Check source
+        working-directory: source
+        run: npm run check
+      - name: Test source
+        working-directory: source
+        run: npm test
       - name: Build Mac package
+        working-directory: source
         shell: bash
         run: |
           set -eu
@@ -60,6 +66,25 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: Ricky-Bitcoin-Reward-Miner-v8-Mac
-          path: Ricky-Bitcoin-Reward-Miner-v8-Mac.zip
+          path: source/Ricky-Bitcoin-Reward-Miner-v8-Mac.zip
           if-no-files-found: error
           retention-days: 7
+      - uses: actions/checkout@v4
+        with:
+          ref: merge/v6-reward-v7-dashboard-20260701
+          fetch-depth: 0
+          path: publisher
+      - name: Publish package to branch
+        shell: bash
+        run: |
+          set -eu
+          cd publisher
+          mkdir -p dist
+          cp ../source/Ricky-Bitcoin-Reward-Miner-v8-Mac.zip dist/
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add dist/Ricky-Bitcoin-Reward-Miner-v8-Mac.zip
+          if ! git diff --cached --quiet; then
+            git commit -m 'build: publish tested Mac download'
+            git push origin HEAD:merge/v6-reward-v7-dashboard-20260701
+          fi
