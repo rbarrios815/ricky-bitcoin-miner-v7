@@ -3,7 +3,7 @@
 const assert = require('assert');
 const net = require('net');
 const crypto = require('crypto');
-const { validateBitcoinAddress, processBatch, currentSecondStats } = require('./server');
+const { validateBitcoinAddress, applyHashBatch, currentSecondStats } = require('./server');
 const {
   StratumMiner,
   sha256d,
@@ -17,7 +17,7 @@ const WORKED_JOB = {
   jobId: '5c04',
   prevhash: 'da0dadb0eda4381df442bde08d23d54d7d371d5ce7af3ee716bd2a7e017eacb8',
   coinb1: '01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff2a03700a08062f503253482f04953f1a5308',
-  coinb2: '102f776166666c65706f6f6c2e636f6d2f0000000001d07e582a010000001976a9145d8f33b0a7c94c878d572c40cbff22a49268467d88ac00000000',
+  coinb2: '102f776166666c65706f6c2e636f6d2f0000000001d07e582a010000001976a9145d8f33b0a7c94c878d572c40cbff22a49268467d88ac00000000',
   merkleBranch: [
     '50a4a386ab344d40d29a833b6e40ea27dab6e5a79a2f8648d3bc0d1aa65ecd3f',
     '7952ecc836fb104f41b2cb06608eeeaa6d1ca2fe4391708fb13bb10ccf8da179',
@@ -175,7 +175,7 @@ async function main() {
   );
 
   const prefixes = new Float64Array([1, 2, 3, 4]);
-  processBatch({
+  applyHashBatch({
     generation: 1,
     workerId: 0,
     jobId: 'telemetry-job',
@@ -183,13 +183,13 @@ async function main() {
     ntime: '00000000',
     version: '20000000',
     second: Math.floor(Date.now() / 1000),
-    hashes: 4,
-    bestHashHex: '00'.repeat(32),
+    count: 4,
+    bestHash: '00'.repeat(32),
     bestDifficulty: 100,
     bestNonce: 1,
     bestOffset: 0,
     bestFoundAt: Date.now(),
-    worstHashHex: 'ff'.repeat(32),
+    worstHash: 'ff'.repeat(32),
     worstDifficulty: 0.00000001,
     worstNonce: 4,
     worstOffset: 3,
@@ -198,8 +198,9 @@ async function main() {
     prefixes: prefixes.buffer,
     poolDifficulty: 1,
     networkDifficulty: 1000,
-    networkTarget: `0x${'0f'.repeat(32)}`,
-    shareTarget: `0x${'ff'.repeat(32)}`
+    networkTargetHex: `0x${'0f'.repeat(32)}`,
+    shareTargetHex: `0x${'ff'.repeat(32)}`,
+    rewardEligible: false
   });
   const second = currentSecondStats();
   assert.strictEqual(second.count, 4);
