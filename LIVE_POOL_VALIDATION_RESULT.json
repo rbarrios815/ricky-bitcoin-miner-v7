@@ -1,0 +1,24 @@
+{
+  "passed": true,
+  "result": {
+    "host": "solo.stratum.braiins.com",
+    "port": 3333,
+    "connected": true,
+    "subscribed": true,
+    "authorized": true,
+    "jobReceived": true,
+    "submissionSent": true,
+    "submissionResponded": true,
+    "submissionAccepted": false,
+    "submissionError": [
+      23,
+      "Above target",
+      null
+    ],
+    "poolDifficulty": 8000,
+    "jobId": "6a1eba110001606b"
+  },
+  "failures": [],
+  "recordedAt": "2026-07-02T10:37:35.501Z",
+  "testedCommit": "eb23672fb0a77e5e9696341c63ac8efc1d747a97"
+}
