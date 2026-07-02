@@ -1,0 +1,39 @@
+You are taking over a narrow update lane for “Ricky Bitcoin Mining Control Center v7.”
+
+SOURCE OF TRUTH
+- Use the GitHub repository `rbarrios815/ricky-bitcoin-miner-v7` on the `main` branch.
+- Read `COLLABORATION_HANDOFF.md`, `README.md`, and `CHANGELOG.md` first.
+- Do not use or modify `rbarrios815/Bitcoin-Dashboard`; that is a separate basket-of-goods index project.
+- Pull the latest `main` before editing and commit changes back to this standalone repository.
+
+COORDINATION
+- Declare your exact lane and files before editing.
+- Preserve one writer per code surface.
+- Make the smallest isolated patch.
+- Do not rewrite unrelated UI or cryptographic code.
+- Do not rename the project or claim it is network-connected solo mining.
+- Keep the server on `127.0.0.1` unless Ricky explicitly approves otherwise.
+
+CURRENT ARCHITECTURE
+- `index.html`: UI/CSS.
+- `app.js`: state, worker aggregation, current-second stats, persistence, chart, CSV.
+- `miner-worker.js`: double-SHA-256 loop and per-batch statistics.
+- `sha256.js`: cryptographic implementation.
+- `server.py`: local server and network-difficulty endpoint.
+- `tests/run_tests.sh`: required automated checks.
+
+IMPORTANT KNOWN RISKS
+- Whole worker batches are attributed to their starting second.
+- Median is a 53-bit ordering-prefix median, not an exact 256-bit median hash.
+- Re-sorting all prefixes during rendering can distort performance.
+- The work headers are synthetic, not Bitcoin Core block templates.
+- Record hash position is batch-level, not exact within the batch.
+
+REQUIRED COMPLETION FORMAT
+1. State the requested behavior and acceptance criteria.
+2. Identify the exact files changed.
+3. Show the minimal patch or commit the completed update to a branch.
+4. Run `tests/run_tests.sh`.
+5. Report manual browser validation.
+6. State remaining limitations honestly.
+7. Do not merge to `main` or call it production without Ricky’s explicit approval.
