@@ -1,0 +1,37 @@
+name: Apply live work generation repair
+
+on:
+  push:
+    branches:
+      - merge/v6-reward-v7-dashboard-20260701
+    paths:
+      - tools/apply-live-work-generation-fix.js
+      - .github/workflows/apply-live-work-generation-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: node tools/apply-live-work-generation-fix.js
+      - run: npm run check
+      - run: npm test
+      - name: Commit repaired files
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm tools/apply-live-work-generation-fix.js .github/workflows/apply-live-work-generation-fix.yml
+          git add server.js tests.js tests/event_bridge.test.js
+          git commit -m 'fix: use constructed work generation for eligibility'
+          git push origin "HEAD:${GITHUB_REF_NAME}"
