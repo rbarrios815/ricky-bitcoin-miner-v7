@@ -45,7 +45,7 @@ The file is ignored by Git and contains no private key or seed phrase.
 
 ## Safety and reality
 
-- Only a **public Bitcoin payout address** is sent as the pool username.
+- The payout field starts blank. Only the **public Bitcoin mainnet address you explicitly enter** is sent as the pool username.
 - Never enter a seed phrase, private key, wallet file, PIN, or xpub.
 - The web server binds only to `127.0.0.1`.
 - Pool endpoints are allowlisted in `server.js`.
