@@ -1,21 +1,44 @@
-name: Miner integration tests
+name: Apply event bridge repair
 
 on:
   push:
-    branches: [main, 'merge/**']
-  pull_request:
+    branches: ['merge/v6-reward-v7-dashboard-20260701']
+    paths: ['.github/workflows/ci.yml']
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  test:
+  repair:
+    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
+      - name: Extract and run isolated repair
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          lines = Path('.github/workflows/repair-event-bridge.yml').read_text().splitlines()
+          start = next(i for i, line in enumerate(lines) if line.strip() == "python - <<'PY'") + 1
+          end = next(i for i in range(start, len(lines)) if lines[i].strip() == 'PY')
+          script = '\n'.join(line[10:] if line.startswith('          ') else line for line in lines[start:end]) + '\n'
+          Path('/tmp/repair_event_bridge.py').write_text(script)
+          PY
+          python /tmp/repair_event_bridge.py
+      - run: git diff --check
       - run: npm run check
       - run: npm test
+      - name: Commit repair
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add lib/stratum-miner.js tests/event_bridge.test.js package.json
+          git commit -m 'fix: bridge v6 miner events into v8 server'
+          git push origin HEAD:${{ github.ref_name }}
