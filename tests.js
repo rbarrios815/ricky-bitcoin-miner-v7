@@ -221,6 +221,10 @@ async function main() {
   assert.ok(appSource.includes("addEventListener('state'"));
   assert.ok(appSource.includes('status.eligibility || {}'));
   assert.ok(appSource.includes('result.state || await requestJson'));
+  const serverSource = require('fs').readFileSync(require('path').join(__dirname, 'server.js'), 'utf8');
+  assert.ok(serverSource.includes("miner.on('work', work => {"));
+  assert.ok(serverSource.includes('state.generation = work.generation'));
+  assert.ok(!serverSource.includes('state.generation = job.generation'));
   assert.ok(!appSource.includes("new EventSource('/events')"));
   assert.ok(html.includes('Best hash · current second'));
   assert.ok(!html.includes('browser SHA-256d demo'));

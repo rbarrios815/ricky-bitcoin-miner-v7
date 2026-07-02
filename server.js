@@ -715,13 +715,26 @@ function startMiner(config) {
     resetHashEvidence();
     state.jobId = job.jobId;
     state.jobReceivedAt = Date.now();
-    state.generation = job.generation;
-    state.currentWork = job;
+    state.generation = null;
+    state.currentWork = null;
     state.networkTarget = job.networkTargetHex;
     const nbitsDifficulty = Number(job.networkDifficulty);
     if (Number.isFinite(nbitsDifficulty) && nbitsDifficulty > 0) state.networkDifficulty = nbitsDifficulty;
     ensureBlockScope(job);
-    addLog('stratum', `Live job ${job.jobId} generation ${job.generation} received.`);
+    addLog('stratum', `Live pool job ${job.jobId} received; constructing hash work.`);
+    broadcastState();
+  });
+  miner.on('work', work => {
+    resetHashEvidence();
+    state.jobId = work.jobId;
+    state.generation = work.generation;
+    state.currentWork = work;
+    state.networkTarget = work.networkTarget;
+    const workDifficulty = Number(work.networkDifficulty);
+    if (Number.isFinite(workDifficulty) && workDifficulty > 0) state.networkDifficulty = workDifficulty;
+    const poolDifficulty = Number(work.poolDifficulty);
+    if (Number.isFinite(poolDifficulty) && poolDifficulty > 0) state.poolDifficulty = poolDifficulty;
+    addLog('stratum', `Live work ${work.jobId} generation ${work.generation} ready for hashing.`);
     broadcastState();
   });
   miner.on('difficulty', difficulty => {

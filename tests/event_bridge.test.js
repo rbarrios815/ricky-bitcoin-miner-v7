@@ -77,6 +77,7 @@ async function main() {
   const authorized = waitFor(miner, 'authorized', value => value === true);
   const difficulty = waitFor(miner, 'difficulty', value => value === 1e-20);
   const job = waitFor(miner, 'job', value => value.jobId === 'bridge-job' && Boolean(value.networkTargetHex));
+  const work = waitFor(miner, 'work', value => value.jobId === 'bridge-job' && Number.isInteger(value.generation));
   const ready = waitFor(miner, 'submission-ready', value => value === true);
   const batch = waitFor(miner, 'hash-batch', value => value.jobId === 'bridge-job');
   const hashrate = waitFor(miner, 'hashrate', value => Number(value) > 0);
@@ -84,11 +85,14 @@ async function main() {
   const result = waitFor(miner, 'share-result', value => value.jobId === 'bridge-job' && value.accepted === true);
 
   miner.start();
-  const values = await Promise.all([connected, subscribed, authorized, difficulty, job, ready, batch, hashrate, submitted, result]);
-  const bridgeBatch = values[6];
-  const bridgeSubmission = values[8];
-  const bridgeResult = values[9];
+  const values = await Promise.all([connected, subscribed, authorized, difficulty, job, work, ready, batch, hashrate, submitted, result]);
+  const bridgeWork = values[5];
+  const bridgeBatch = values[7];
+  const bridgeSubmission = values[9];
+  const bridgeResult = values[10];
 
+  assert.strictEqual(bridgeWork.generation, bridgeBatch.generation);
+  assert.strictEqual(bridgeWork.jobId, bridgeBatch.jobId);
   assert.strictEqual(bridgeBatch.count, 16);
   assert.strictEqual(typeof bridgeBatch.bestHash, 'string');
   assert.strictEqual(typeof bridgeBatch.worstHash, 'string');
